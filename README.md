@@ -47,6 +47,14 @@ follow the same pattern:
   scratch every time. Only whoever maintains that base runs
   `./build.sh <target> --base`; everyone else's normal build already points
   at the pushed result.
+- **Secrets** (e.g. a Hugging Face token): keep them in a local `.env` file
+  (copy [`.env.example`](.env.example) — it's gitignored, and doesn't need to
+  live inside this repo at all). The wizard asks for its **path** and a
+  Kubernetes **Secret name**, never its contents, wires up `envFrom` in your
+  Job, and reminds you to create the Secret yourself with
+  `kubectl create secret generic <name> --from-env-file=<path>`. Never put a
+  real token in a Dockerfile or any committed file — see each folder's
+  "Managing secrets" section.
 
 ## If you're a new colleague picking this up
 
@@ -66,5 +74,6 @@ One-time setup, shared across all three folders:
 
 See any folder's README for the exact commands, or
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to build your own image on top of
-the shared bases, edit the templates, or add a new folder for a different
-tool/stack.
+the shared bases, edit the templates, add a new folder for a different
+tool/stack, push to Docker Hub instead if ECIR runs out of space, or how
+robot accounts (shared push/pull credentials) actually work in this project.

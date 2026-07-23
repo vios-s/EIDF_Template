@@ -16,6 +16,13 @@ CUDA/my_first_cuda/
 # Local tool config, not meant to be shared.
 **/.claude/settings.local.json
 
+# Never commit local secrets files. Keep these outside the repo if you can —
+# this is just a safety net, not the recommended place for them. See each
+# folder's README "Managing secrets" section.
+**/.env
+**/.env.*
+!**/.env.example
+
 # Common build junk, in case it reappears.
 build/
 cmake-build-*/

@@ -118,12 +118,55 @@ kubectl -n eidf105ns logs -f <pod-name>              # watch the model load
 (`job.yyx.yaml` / `service.yyx.yaml` are the concrete examples already
 checked in for `yyx`.)
 
-Gated models (Llama, etc.) need a Hugging Face token:
+Gated models (Llama, etc.) need `HF_TOKEN` — the wizard asks about this too
+(see "Managing secrets" below), or by hand:
 
 ```bash
 kubectl -n eidf105ns create secret generic hf-token --from-literal=token=hf_xxx
 # then uncomment the HF_TOKEN env block in the Job yaml
 ```
+
+## Managing secrets
+
+**Never put an actual API key/token in a Dockerfile, `image.conf`, or any
+committed yaml** — anyone who can pull the image or read the repo gets it,
+and Docker layers keep old values around even after you "remove" them.
+
+### Preparing your `.env` file
+
+1. Copy the example at the repo root and fill in your real values:
+   ```bash
+   cp ../.env.example .env
+   # edit .env — one KEY=value per line, e.g. HF_TOKEN=hf_...
+   ```
+2. **Where to put it**: anywhere on the machine you run `build.sh`/`kubectl`
+   from — it never needs to be inside this repo at all, and keeping it
+   somewhere else entirely (e.g. your own project folder) is the safest
+   option. If you do keep it inside your clone of this repo for convenience,
+   `.env` (and `.env.*`) are already gitignored — but that's a safety net,
+   not a reason to relax.
+3. It's only ever read by `kubectl` on your own machine, straight into the
+   cluster — nothing in this repo, and nothing `build.sh` runs, ever reads
+   or uploads it anywhere else.
+
+### How the wizard wires it up
+
+The wizard asks, for serving mode, whether you have a `.env` file (e.g. with
+`HF_TOKEN` for gated models) — but it only ever asks for its **path** and a
+**Kubernetes Secret name** to create, never its contents. If you say yes, it
+wires up a real `envFrom: secretRef` block in your generated `job.<you>.yaml`
+and reminds you, at the end, to actually create that Secret:
+
+```bash
+kubectl -n eidf105ns create secret generic my-env --from-env-file=.env
+```
+
+That command is the *only* place your `.env` file's contents ever get
+read — run directly by you, never by this script. Every `KEY=value` line in
+it becomes an environment variable in the container, so `HF_TOKEN` (and
+anything else you add, e.g. a self-chosen `VLLM_API_KEY` to protect the
+endpoint) can all go in the same file. The Secret then lives only in the
+cluster; the Job just references it by name.
 
 ## 5. Port-forward to your VM
 

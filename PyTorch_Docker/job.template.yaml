@@ -47,6 +47,16 @@ spec:
               value: "/data/users/<USERNAME>/hf-cache"
             - name: TORCH_HOME
               value: "/data/users/<USERNAME>/.torch"
+          # Need secrets in your job (HF token, W&B key, etc.)? Keep them in
+          # a local .env file — never commit it, never bake it into the
+          # image (see README's "Managing secrets"). The wizard can wire this
+          # up for you, or by hand:
+          #   kubectl create secret generic my-env --from-env-file=.env
+          # then uncomment:
+          # envFrom:
+          #   - secretRef:
+          #       name: my-env
+          # <SECRET_ENV_HOOK>
           resources:
             requests:
               cpu: 8

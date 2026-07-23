@@ -151,6 +151,104 @@ these on your first build but a colleague on a different day very well might.
   derived image (see above) or `cd /data/users/<you>/wherever` first in the
   command.
 
+## Alternative: pushing to Docker Hub if ECIR is full
+
+ECIR (Harbor) storage is a shared, project-level quota — if a push starts
+failing with something like `no space left`/`quota exceeded` rather than an
+auth error, that's the registry being full, not your login. There's no
+built-in overflow handling on EIDF's side, but `build.sh`'s "Registry host" /
+"ECIR registry project" prompts are just plain strings — nothing hardcodes
+`registry.eidf.ac.uk`, so you can point the exact same wizard at Docker Hub
+instead:
+
+```
+Registry host [registry.eidf.ac.uk]: docker.io
+ECIR registry project [eidf105]: <your-dockerhub-username>
+```
+
+(or non-interactively: `REGISTRY=docker.io PROJECT=<you> ./build.sh cuda`).
+It builds and tags exactly the same way, then prints `docker login docker.io`
++ `docker push docker.io/<you>/cuda-eidf:latest` instead.
+
+One catch: every job template's `imagePullSecrets: [eidf105-ecir-read-robot]`
+is an ECIR-only credential — Kubernetes just ignores it for a registry it
+doesn't match, so it's harmless to leave in, but it also means it does
+**nothing** for a Docker Hub pull. That's fine if your Docker Hub repo is
+public (anonymous pull just works); for a private repo you'd need to create
+your own `kubernetes.io/dockerconfigjson` Secret from your Docker Hub
+credentials and swap it into `imagePullSecrets` yourself. Treat this as a
+temporary workaround, not a replacement for ECIR — switch back once there's
+quota again (ask on Helpdesk, or see the storage-quota ticket already filed
+for this project).
+
+## Robot accounts (shared push/pull credentials)
+
+The read-only `eidf105-ecir-read-robot` Secret already in `eidf105ns` is a
+**robot account** — a project-level credential, not tied to any one person's
+SAFE login, which is why every Job's `imagePullSecrets` can reference the
+same one regardless of who deployed it. It's already set up; don't recreate
+it.
+
+A **read-write** robot account (so pushing doesn't need everyone's own,
+regularly-expiring personal CLI Secret) does not currently exist for
+`eidf105` — one was requested via Helpdesk, but the account it initially
+pointed back to turned out to still be read-only (verified by an actual
+failed `docker push` — `unauthorized: ... action: push`); that follow-up is
+still unresolved as of this writing.
+
+Checked EIDF's own docs
+([registry FAQ](https://docs.eidf.ac.uk/services/registry/faq/),
+[working with the registry](https://docs.eidf.ac.uk/services/registry/working-with/))
+for a way around this — as of 2026-07-23, there is **no CLI or API command**
+to create or regenerate a robot account yourself; it's Helpdesk-request-only.
+EIDF's own docs note "new functionality soon to be added to the EIDF Portal
+to allow project users to create read-only robot accounts" — read-only, and
+not live yet. Personal push credentials (the CLI Secret each user copies from
+their SAFE profile for `docker login`) have the same limitation: no
+self-service regeneration command exists either, it's copy-from-dashboard
+every time it expires. If EIDF ships either of these, this section should be
+updated with the actual command.
+
+## Managing secrets
+
+**Never put an actual API key/token in a Dockerfile, `image.conf`, or any
+committed yaml.** Anyone who can pull the image or read the repo gets it, and
+Docker layers keep old values around even after you "remove" them in a later
+layer.
+
+The pattern used throughout this repo: keep secrets in a local `.env` file
+(copy `.env.example` at the repo root — never commit the real one, it's
+already gitignored, and it doesn't need to live inside this repo at all).
+Convert it to a Kubernetes Secret with kubectl's built-in
+`--from-env-file`, and reference the whole thing generically with
+`envFrom: secretRef` in the Job — no per-variable wiring needed, so whatever
+your `.env` contains (`HUGGINGFACE_TOKEN`, `WANDB_API_KEY`, anything) just
+shows up as container env vars without any repo changes.
+
+The job template has a `# <SECRET_ENV_HOOK>` marker line (at the container
+level, alongside `env:`/`command:`), and `image.conf` sets
+`SUPPORTS_ENV_SECRETS=yes` + `SECRET_DEFAULT_NAME` (a suggested Secret name)
+for targets that should offer this. When the wizard runs and you opt in, it:
+
+1. Asks for the **path to your `.env` file** and a **Kubernetes Secret name**
+   to create it as — metadata only, it never opens or reads the file.
+2. Substitutes a real `envFrom: [{ secretRef: { name: ... } }]` block into
+   your generated `job.<you>.yaml`, replacing the marker line.
+3. Prints a reminder, at the end, to actually create that Secret yourself:
+   `kubectl create secret generic <name> --from-env-file=<path>`.
+
+At no point does `build.sh` read, see, or store your `.env` file's actual
+contents — that command is run directly by you, once, and the Secret lives
+only in the cluster from then on. If you decline the prompt (or run
+non-interactively, which skips job generation entirely), the marker line is
+just deleted and the job yaml has no secret wiring at all.
+
+Adding this to a new target is two changes: put `# <SECRET_ENV_HOOK>` at the
+container level (not inside `env:`) in your `job.template.yaml`, and set
+`SUPPORTS_ENV_SECRETS=yes` + `SECRET_DEFAULT_NAME` in `image.conf`. Leave
+`SUPPORTS_ENV_SECRETS` unset (or `no`) if the target never needs secrets —
+`build.sh` just skips the question.
+
 ## Maintaining `Dockerfile.base` (CUDA, PyTorch_Docker)
 
 Only touch this if you're deliberately changing something everyone in the
@@ -181,6 +279,10 @@ uses them next:
    makes sense for this tool) with `<USERNAME>`/`<USER_ID>`/`<GROUP_ID>`
    placeholders (and any extra placeholder your job needs, e.g. `<COMMAND>`),
    `imagePullSecrets: [eidf105-ecir-read-robot]`, and the NFS volume mount.
+   If the tool can use a secret (an API token, etc.), add a
+   `# <SECRET_ENV_HOOK>` marker line where the wizard should insert it — see
+   "Managing secrets" below, don't hand-write the secret block into the
+   template itself.
 3. `image.conf` — copy an existing one (e.g. `CUDA/image.conf`) and fill in:
    - `TARGET`/`IMAGE_NAME`/`HAS_BASE`/`BASE_IMAGE_NAME`/`HAS_TEMPLATE`/`DESCRIPTION`
    - one `JOB_MODE_<n>_NAME`/`_LABEL`/`_TEMPLATE` block per job mode the
@@ -189,6 +291,8 @@ uses them next:
      or vllm's `MODEL`)
    - `HAS_SERVICE`/`SERVICE_TEMPLATE`/`SERVICE_JOB_MODE` if a Service should
      also be generated for one of the job modes (see `vllm/image.conf`)
+   - `SUPPORTS_ENV_SECRETS`/`SECRET_DEFAULT_NAME` if you added a
+     `<SECRET_ENV_HOOK>` marker in step 2
 
    This one file is what makes the new folder show up in `./build.sh --list`
    and fully drives the interactive wizard — nothing to change in `build.sh`

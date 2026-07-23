@@ -46,6 +46,7 @@ declare -a TARGET_NAMES=()
 declare -A TARGET_DIR=() TARGET_IMAGE_NAME=() TARGET_HAS_BASE=()
 declare -A TARGET_BASE_IMAGE_NAME=() TARGET_HAS_TEMPLATE=() TARGET_DESCRIPTION=()
 declare -A TARGET_HAS_SERVICE=() TARGET_SERVICE_TEMPLATE=() TARGET_SERVICE_JOB_MODE=()
+declare -A TARGET_SUPPORTS_ENV_SECRETS=() TARGET_SECRET_DEFAULT_NAME=()
 declare -A JOBMODE_COUNT=()
 declare -A JOBMODE_NAME=() JOBMODE_LABEL=() JOBMODE_TEMPLATE=()
 declare -A JOBMODE_EXTRA_VAR=() JOBMODE_EXTRA_PROMPT=() JOBMODE_EXTRA_DEFAULT=()
@@ -55,6 +56,7 @@ for conf in */image.conf; do
   dir="$(dirname "$conf")"
   TARGET="" IMAGE_NAME="" HAS_BASE=no BASE_IMAGE_NAME="" HAS_TEMPLATE=no DESCRIPTION=""
   HAS_SERVICE=no SERVICE_TEMPLATE="" SERVICE_JOB_MODE=""
+  SUPPORTS_ENV_SECRETS=no SECRET_DEFAULT_NAME=""
   for i in 1 2 3; do
     eval "JOB_MODE_${i}_NAME=''; JOB_MODE_${i}_LABEL=''; JOB_MODE_${i}_TEMPLATE=''"
     eval "JOB_MODE_${i}_EXTRA_VAR=''; JOB_MODE_${i}_EXTRA_PROMPT=''; JOB_MODE_${i}_EXTRA_DEFAULT=''"
@@ -75,6 +77,8 @@ for conf in */image.conf; do
   TARGET_HAS_SERVICE["$TARGET"]="$HAS_SERVICE"
   TARGET_SERVICE_TEMPLATE["$TARGET"]="$SERVICE_TEMPLATE"
   TARGET_SERVICE_JOB_MODE["$TARGET"]="$SERVICE_JOB_MODE"
+  TARGET_SUPPORTS_ENV_SECRETS["$TARGET"]="$SUPPORTS_ENV_SECRETS"
+  TARGET_SECRET_DEFAULT_NAME["$TARGET"]="$SECRET_DEFAULT_NAME"
 
   count=0
   for i in 1 2 3; do
@@ -147,6 +151,9 @@ if [ "$INTERACTIVE" = 1 ]; then
 
   echo
   if [ "$MODE" = base ]; then
+    echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
+    echo " Docker Hub username as the project to push there instead — see"
+    echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
     REGISTRY=$(ask "Registry host" "${REGISTRY:-registry.eidf.ac.uk}")
     PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
     USERNAME="${USERNAME:-$(id -un)}"; USER_ID="${USER_ID:-$(id -u)}"; GROUP_ID="${GROUP_ID:-$(id -g)}"
@@ -155,6 +162,9 @@ if [ "$INTERACTIVE" = 1 ]; then
     USER_ID=$(ask  "Your uid"              "${USER_ID:-$(id -u)}")
     GROUP_ID=$(ask "Your gid"              "${GROUP_ID:-$(id -g)}")
     NAMESPACE=$(ask "Kubernetes namespace" "eidf105ns")
+    echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
+    echo " Docker Hub username as the project to push there instead — see"
+    echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
     REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
     PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
 
@@ -179,6 +189,21 @@ if [ "$INTERACTIVE" = 1 ]; then
     if [ -n "$EXTRA_VAR" ]; then
       EXTRA_VALUE=$(ask "${JOBMODE_EXTRA_PROMPT[${TARGET}_${JOB_MODE_IDX}]}" "${JOBMODE_EXTRA_DEFAULT[${TARGET}_${JOB_MODE_IDX}]}")
     fi
+
+    # Optional secrets (HF token, W&B key, etc.), fed from a local .env file
+    # you create yourself. This script never reads that file or asks for its
+    # contents — only its path (so it can tell you the exact kubectl command)
+    # and the K8s Secret name to create it under.
+    WANT_SECRET=0
+    ENV_FILE="" SECRET_NAME=""
+    if [ "${TARGET_SUPPORTS_ENV_SECRETS[$TARGET]}" = yes ]; then
+      echo
+      if confirm "Do you have a local .env file with secrets this job needs (HF token, W&B key, etc.)? This only asks for the file's path and a Secret name — never its contents." "n"; then
+        WANT_SECRET=1
+        ENV_FILE=$(ask "Path to your .env file" ".env")
+        SECRET_NAME=$(ask "K8s Secret name to create it as (you create this yourself, see next steps)" "${TARGET_SECRET_DEFAULT_NAME[$TARGET]}")
+      fi
+    fi
   fi
 
   case "$MODE" in
@@ -195,6 +220,7 @@ if [ "$INTERACTIVE" = 1 ]; then
     echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME}.yaml"
     [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ] \
       && echo "          + ${DIR}/service.${USERNAME}.yaml"
+    [ "$WANT_SECRET" = 1 ] && echo "  secret: ${ENV_FILE} -> Secret '${SECRET_NAME}' (you create this yourself)"
   fi
   echo "  (this only builds locally — you push it yourself afterward)"
   echo
@@ -288,10 +314,23 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
     -e "s#<USER_ID>#${USER_ID}#g"
     -e "s#<GROUP_ID>#${GROUP_ID}#g"
     -e "s#eidf105ns#${NAMESPACE}#g"
-    -e "s#registry\\.eidf\\.ac\\.uk/eidf105/#${REGISTRY}/${PROJECT}/#g"
+    # Replace the whole image line with $IMAGE (already computed per-mode
+    # above: :latest for personal, :$USERNAME for template) rather than
+    # patching registry/tag piecemeal — the template's hardcoded tag is only
+    # ever correct for one of the two modes it's shared between.
+    -e "s#^\(\s*\)image: .*#\1image: ${IMAGE}#"
   )
   if [ -n "$EXTRA_VAR" ]; then
     sed_args+=(-e "s#<${EXTRA_VAR}>#${EXTRA_VALUE}#g")
+  fi
+  if [ "$WANT_SECRET" = 1 ]; then
+    # Replace the marker with a real (uncommented) envFrom block — this
+    # script never reads your .env file or sees any secret value, only the
+    # Secret's name.
+    secret_block="          envFrom:\n            - secretRef:\n                name: ${SECRET_NAME}"
+    sed_args+=(-e "s#.*<SECRET_ENV_HOOK>.*#${secret_block}#")
+  else
+    sed_args+=(-e "/<SECRET_ENV_HOOK>/d")
   fi
   sed "${sed_args[@]}" "$JOB_TEMPLATE_FILE" > "$JOB_OUT"
   echo ">> Wrote ${DIR}/${JOB_OUT}"
@@ -310,8 +349,18 @@ echo "1. Push it (this script never does this for you):"
 echo "     docker login ${REGISTRY}   # if not already logged in"
 echo "     docker push ${IMAGE}"
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
-  echo
-  echo "2. Deploy:"
+  if [ "$WANT_SECRET" = 1 ]; then
+    echo
+    echo "2. Create the Secret from your .env file (this reads ${ENV_FILE} on"
+    echo "   YOUR machine when you run it — nothing from it passed through"
+    echo "   this script):"
+    echo "     kubectl -n ${NAMESPACE} create secret generic ${SECRET_NAME} --from-env-file=${ENV_FILE}"
+    echo
+    echo "3. Deploy:"
+  else
+    echo
+    echo "2. Deploy:"
+  fi
   echo "     kubectl -n ${NAMESPACE} create -f ${DIR}/${JOB_OUT}"
   [ -n "$SVC_OUT" ] && echo "     kubectl -n ${NAMESPACE} apply  -f ${DIR}/${SVC_OUT}"
   echo "     kubectl -n ${NAMESPACE} get pods -l owner=${USERNAME} -w"
