@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+###############################################################################
+# PyTorch BASE image (eidf105) — shared, maintainer-built layer.
+#
+# This is the slow part (PyTorch + apt tools + conda/mamba) built ONCE and
+# pushed to ECIR, so everyone's personal/derived image only has to add a thin
+# "create my user" layer instead of reinstalling all of this every time.
+#
+# Maintainers rebuild & push with:
+#   ../build.sh pytorch --base   # from the repo root
+#
+# Everyone else: don't build this directly — `Dockerfile` / `Dockerfile.template`
+# already start `FROM` the pushed result of this file. To build your OWN image
+# on top of it (extra packages, etc.), write a new Dockerfile that starts:
+#   FROM registry.eidf.ac.uk/eidf105/pytorch-eidf-base:latest
+###############################################################################
+FROM registry.eidf.ac.uk/docker-cache/pytorch/pytorch:2.13.0-cuda13.0-cudnn9-runtime
+
+LABEL maintainer="EIDF eidf105 group"
+LABEL description="Shared PyTorch base image for the EIDF GPU service"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# NOTE: this pytorch/pytorch tag ships a plain system Python + pip install of
+# torch (no conda — newer pytorch/pytorch images dropped the old conda-based
+# build). We still want a conda env for colleagues used to conda, so Miniforge
+# is installed fresh below rather than relying on one being present already.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential git git-lfs curl wget ca-certificates \
+       libsndfile1-dev libgl1 screen tmux htop nvtop nano less \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && git lfs install --system
+
+# --- Miniforge (conda + mamba), shared system-wide ---------------------------
+# Installed under /opt (not a user's $HOME, since no user exists yet at this
+# layer) and left world-writable so whichever non-root user gets created in
+# the derived image can still `conda install`/`pip install` at runtime — this
+# container only ever has one real user in it, so that's not a meaningful
+# isolation boundary here.
+ARG MINIFORGE_VERSION=24.11.3-2
+RUN curl -fsSL -o /tmp/miniforge.sh \
+      "https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-Linux-x86_64.sh" \
+    && bash /tmp/miniforge.sh -b -p /opt/miniforge3 \
+    && rm /tmp/miniforge.sh \
+    && chmod -R a+rwX /opt/miniforge3
+
+ENV PATH=/opt/miniforge3/bin:${PATH}
+
+# The conda env is what colleagues actually land in (see Dockerfile's `conda
+# init bash`), so give it its own PyTorch too — the pip-installed system copy
+# from the base pytorch/pytorch image is left in place but unused by default.
+# NOTE: the `pytorch`/`nvidia` conda channels stopped publishing pytorch-cuda
+# builds past 12.4 — install via pip from PyTorch's own wheel index instead,
+# which tracks current CUDA versions.
+RUN pip install --no-cache-dir \
+      torch torchvision --index-url https://download.pytorch.org/whl/cu128

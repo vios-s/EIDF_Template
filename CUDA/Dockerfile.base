@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+###############################################################################
+# CUDA + conda BASE image (eidf105) — shared, maintainer-built layer.
+#
+# This is the slow part (CUDA devel + apt tools + Miniforge) built ONCE and
+# pushed to ECIR, so everyone's personal/derived image only has to add a thin
+# "create my user" layer instead of reinstalling all of this every time.
+#
+# Maintainers rebuild & push with:
+#   ../build.sh cuda --base   # from the repo root
+#
+# Everyone else: don't build this directly — `Dockerfile` / `Dockerfile.template`
+# already start `FROM` the pushed result of this file. To build your OWN image
+# on top of it (extra packages, etc.), write a new Dockerfile that starts:
+#   FROM registry.eidf.ac.uk/eidf105/cuda-eidf-base:latest
+###############################################################################
+FROM registry.eidf.ac.uk/docker-cache/nvidia/cuda:12.9.2-cudnn-devel-ubuntu24.04
+
+LABEL maintainer="EIDF eidf105 group"
+LABEL description="Shared CUDA + conda base image for the EIDF GPU service"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential cmake ninja-build ffmpeg libsm6 libxext6 \
+       git git-lfs curl wget ca-certificates \
+       screen tmux htop nvtop nano zsh less \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && git lfs install --system
+
+# --- Miniforge (conda + mamba), shared system-wide ---------------------------
+# Installed under /opt (not a user's $HOME, since no user exists yet at this
+# layer) and left world-writable so whichever non-root user gets created in
+# the derived image can still `conda install`/`pip install` at runtime — this
+# container only ever has one real user in it, so that's not a meaningful
+# isolation boundary here.
+ARG MINIFORGE_VERSION=24.11.3-2
+RUN curl -fsSL -o /tmp/miniforge.sh \
+      "https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-Linux-x86_64.sh" \
+    && bash /tmp/miniforge.sh -b -p /opt/miniforge3 \
+    && rm /tmp/miniforge.sh \
+    && chmod -R a+rwX /opt/miniforge3
+
+ENV PATH=/opt/miniforge3/bin:${PATH}

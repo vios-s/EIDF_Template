@@ -1,0 +1,69 @@
+###############################################################################
+# INTERACTIVE / DEBUG pod (eidf105) — keeps the container alive so you can
+# exec in and run `vllm serve` (or anything) by hand. Use job.template.yaml
+# instead for a real auto-starting service.
+#
+#   kubectl -n eidf105ns create -f job.interactive.yaml
+#   kubectl -n eidf105ns exec -it <pod-name> -- /bin/bash
+#   # inside: vllm serve <model> --host 0.0.0.0 --port 8000
+#   kubectl -n eidf105ns port-forward <pod-name> 8000:8000
+###############################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: vllm-dev-
+  labels:
+    kueue.x-k8s.io/queue-name: eidf105ns-user-queue
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: vllm-dev
+        owner: <USERNAME>
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: <USER_ID>
+        runAsGroup: <GROUP_ID>
+      imagePullSecrets:
+        - name: eidf105-ecir-read-robot
+      containers:
+        - name: vllm
+          image: registry.eidf.ac.uk/eidf105/vllm-eidf:latest
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args: ["echo 'Pod ready — exec in and run vllm serve'; sleep infinity"]
+          env:
+            - name: HF_HOME
+              value: "/data/users/<USERNAME>/hf-cache"
+            - name: HF_XET_HIGH_PERFORMANCE
+              value: "1"
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: 8
+              memory: 64Gi
+              nvidia.com/gpu: 1
+            limits:
+              cpu: 8
+              memory: 64Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+            - { name: nfs,  mountPath: /data }
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+        - name: nfs
+          nfs:
+            server: 10.24.2.112
+            path: /
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3

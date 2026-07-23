@@ -1,0 +1,77 @@
+###############################################################################
+# CUDA training Job — GROUP TEMPLATE (eidf105) for the EIDF GPU Service
+#
+# Runs a command/script once and exits (batch-style).
+# Copy this file, replace every <PLACEHOLDER>, then:
+#   kubectl -n eidf105ns create -f job.<you>.yaml
+#   kubectl -n eidf105ns get pods -l owner=<you> -w
+#   kubectl -n eidf105ns logs -f <pod-name>
+###############################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: cuda-<USERNAME>-
+  labels:
+    kueue.x-k8s.io/queue-name: eidf105ns-user-queue
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: cuda
+        owner: <USERNAME>
+    spec:
+      restartPolicy: Never
+      # Run as YOUR uid/gid (find with `id` on the EIDF login VM) so files
+      # written to the NFS are owned correctly.
+      # (No fsGroup: the NFS export is the whole share; fsGroup would trigger
+      #  a recursive chown of everything mounted.)
+      securityContext:
+        runAsUser: <USER_ID>
+        runAsGroup: <GROUP_ID>
+        runAsNonRoot: true
+      # Pre-provisioned read-only robot account for eidf105, shared across the project.
+      imagePullSecrets:
+        - name: eidf105-ecir-read-robot
+      containers:
+        - name: cuda
+          image: registry.eidf.ac.uk/eidf105/cuda-eidf:<USERNAME>
+          imagePullPolicy: Always
+          env:
+            - name: HF_HOME
+              value: "/data/users/<USERNAME>/hf-cache"
+            - name: TORCH_HOME
+              value: "/data/users/<USERNAME>/.torch"
+            # - name: HUGGINGFACE_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: hf-token, key: token }
+          command: ["/bin/bash", "-c"]
+          args: ["<COMMAND>"]                 # e.g. "python train.py"
+          resources:
+            requests:
+              cpu: 8
+              memory: 32Gi
+              nvidia.com/gpu: 1
+            limits:
+              cpu: 8
+              memory: 32Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+            - { name: nfs,  mountPath: /data }
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
+        - name: nfs
+          nfs:
+            server: 10.24.2.112
+            path: /
+      # Pick a GPU type. Options include:
+      #   NVIDIA-H200                 NVIDIA-H100-80GB-HBM3
+      #   NVIDIA-A100-SXM4-80GB       NVIDIA-A100-SXM4-40GB
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3

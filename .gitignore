@@ -1,0 +1,24 @@
+# Personal instance configs — everyone (via the root build.sh wizard)
+# generates their own job.<you>.yaml / service.<you>.yaml from the
+# *.template.yaml files, so none of those generated, per-user files belong
+# in git.
+**/job.*.yaml
+!**/job.template.yaml
+!**/job.interactive.yaml
+**/service.*.yaml
+!**/service.template.yaml
+CUDA/Dockerfile
+PyTorch_Docker/Dockerfile
+
+# Personal working files (Yuyang's own stuff), not part of the shared template.
+CUDA/my_first_cuda/
+
+# Local tool config, not meant to be shared.
+**/.claude/settings.local.json
+
+# Common build junk, in case it reappears.
+build/
+cmake-build-*/
+.idea/
+*.o
+*.log

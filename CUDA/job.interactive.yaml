@@ -1,0 +1,64 @@
+###############################################################################
+# INTERACTIVE / DEBUG pod (eidf105) — keeps the container alive so you can
+# exec in as yourself (not root) with conda + nvcc ready to go.
+#
+#   kubectl -n eidf105ns create -f job.interactive.yaml
+#   kubectl -n eidf105ns exec -it <pod-name> -- /bin/bash
+###############################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: cuda-dev-
+  labels:
+    kueue.x-k8s.io/queue-name: eidf105ns-user-queue
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: cuda-dev
+        owner: <USERNAME>
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: <USER_ID>
+        runAsGroup: <GROUP_ID>
+        runAsNonRoot: true
+      imagePullSecrets:
+        - name: eidf105-ecir-read-robot
+      containers:
+        - name: cuda
+          image: registry.eidf.ac.uk/eidf105/cuda-eidf:<USERNAME>
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args: ["echo 'Pod ready — exec in and get to work'; sleep infinity"]
+          env:
+            - name: HF_HOME
+              value: "/data/users/<USERNAME>/hf-cache"
+            - name: TORCH_HOME
+              value: "/data/users/<USERNAME>/.torch"
+          resources:
+            requests:
+              cpu: 8
+              memory: 32Gi
+              nvidia.com/gpu: 1
+            limits:
+              cpu: 8
+              memory: 32Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+            - { name: nfs,  mountPath: /data }
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
+        - name: nfs
+          nfs:
+            server: 10.24.2.112
+            path: /
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3

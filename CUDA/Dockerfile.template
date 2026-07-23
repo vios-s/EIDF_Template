@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+###############################################################################
+# CUDA dev image — GROUP TEMPLATE (eidf105) for the EIDF GPU Service
+#
+# Thin layer on top of the shared cuda-eidf-base image (see Dockerfile.base):
+# just your non-root user + whatever packages you want to add. A non-root
+# user matching YOUR EIDF NFS uid/gid is baked in, so `kubectl exec -it`
+# drops you into your own conda env as yourself, not root. Find your uid/gid
+# on the EIDF login VM with: id
+#
+# Build (per user):
+#   docker login registry.eidf.ac.uk     # SAFE username + CLI Secret
+#   docker build \
+#     --build-arg USERNAME=<you> \
+#     --build-arg USER_ID=<uid> \
+#     --build-arg GROUP_ID=<gid> \
+#     -t registry.eidf.ac.uk/eidf105/cuda-eidf:<you> .
+#   docker push registry.eidf.ac.uk/eidf105/cuda-eidf:<you>
+#
+# See build.sh (repo root) for a one-liner and README.md for the full workflow.
+###############################################################################
+FROM registry.eidf.ac.uk/eidf105/cuda-eidf-base:latest
+
+LABEL maintainer="EIDF eidf105 group"
+LABEL description="CUDA + conda dev image for the EIDF GPU service"
+
+# --- Non-root user matching YOUR EIDF NFS uid/gid ----------------------------
+ARG USERNAME=eidf
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+RUN existing_user="$(getent passwd ${USER_ID} | cut -d: -f1)"; \
+    if [ -n "$existing_user" ] && [ "$existing_user" != "${USERNAME}" ]; then \
+        userdel -r "$existing_user" 2>/dev/null || userdel -f "$existing_user" 2>/dev/null || true; \
+    fi \
+    && if ! getent group ${GROUP_ID} >/dev/null; then \
+        groupadd -g ${GROUP_ID} ${USERNAME}; \
+    fi \
+    && if getent passwd ${USERNAME} >/dev/null; then \
+        usermod -u ${USER_ID} -g ${GROUP_ID} -d /home/${USERNAME} -m ${USERNAME}; \
+    else \
+        useradd -m -u ${USER_ID} -g ${GROUP_ID} -s /bin/bash ${USERNAME}; \
+    fi \
+    && mkdir -p /home/${USERNAME} \
+    && chown -R ${USER_ID}:${GROUP_ID} /home/${USERNAME}
+
+ENV HOME=/home/${USERNAME}
+USER ${USERNAME}
+RUN conda init bash
+
+# --- Add your own packages here ----------------------------------------------
+# RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# RUN pip install --no-cache-dir transformers diffusers accelerate
+
+# HF / torch caches default to $HOME here; point HF_HOME/TORCH_HOME at your
+# NFS path in the Job (see job.template.yaml) so weights persist across runs.
+ENV TORCH_HOME=${HOME}/.cache/torch \
+    HF_HOME=${HOME}/.cache/huggingface \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+WORKDIR ${HOME}
