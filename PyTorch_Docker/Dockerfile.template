@@ -49,13 +49,13 @@ RUN conda init bash
 
 # --- Add your own packages here -----------------------------------------
 # RUN pip install --no-cache-dir transformers diffusers[torch] sentence-transformers \
-#       huggingface_hub[hf_transfer,cli,torch] hf_transfer matplotlib
+#       huggingface_hub[cli,torch] matplotlib
 # RUN mamba install -y -c pytorch -c nvidia faiss-gpu=1.9.0
 
 # HF / torch caches default to $HOME here; point them at your NFS path in the
 # Job (see job.template.yaml) so weights persist across runs.
 ENV TORCH_HOME=${HOME}/.cache/torch \
     HF_HOME=${HOME}/.cache/huggingface \
-    HF_HUB_ENABLE_HF_TRANSFER=1
+    HF_XET_HIGH_PERFORMANCE=1
 
 WORKDIR ${HOME}

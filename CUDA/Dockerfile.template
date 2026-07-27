@@ -55,6 +55,6 @@ RUN conda init bash
 # NFS path in the Job (see job.template.yaml) so weights persist across runs.
 ENV TORCH_HOME=${HOME}/.cache/torch \
     HF_HOME=${HOME}/.cache/huggingface \
-    HF_HUB_ENABLE_HF_TRANSFER=1
+    HF_XET_HIGH_PERFORMANCE=1
 
 WORKDIR ${HOME}
