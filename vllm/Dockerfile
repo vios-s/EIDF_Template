@@ -76,3 +76,13 @@ EXPOSE 8000
 
 # No CMD/ENTRYPOINT override: the Kubernetes Job supplies the full
 # `vllm serve ...` command so the model and flags stay configurable per run.
+#
+# FOOTGUN, inherited from the base image, which sets
+# ENTRYPOINT ["vllm", "serve"]:
+#   docker run <image> bash        # does NOT give you a shell
+# It appends "bash" as an argument to `vllm serve` and dies with a completely
+# unrelated-looking "RuntimeError: Failed to infer device type". To get a shell
+# locally you must override the entrypoint:
+#   docker run --rm -it --entrypoint /bin/bash <image>
+# Kubernetes is unaffected: a pod spec's `command:` replaces ENTRYPOINT outright,
+# and both Job yamls here set it explicitly.

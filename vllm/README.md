@@ -75,6 +75,25 @@ builds their own tag if uid/gid differ, e.g.
 `registry.eidf.ac.uk/eidf105/vllm-eidf:yyx`. Set `IMAGE=...` to override the
 tag (non-interactive mode only).
 
+### Running the image locally
+
+The base image sets `ENTRYPOINT ["vllm", "serve"]`, so this does **not** give you
+a shell:
+
+```bash
+docker run --rm -it registry.eidf.ac.uk/eidf105/vllm-eidf:latest bash
+```
+
+It appends `bash` as an argument to `vllm serve` and fails with a misleading
+`RuntimeError: Failed to infer device type`. Override the entrypoint instead:
+
+```bash
+docker run --rm -it --entrypoint /bin/bash registry.eidf.ac.uk/eidf105/vllm-eidf:latest
+```
+
+Kubernetes is unaffected — a pod spec's `command:` replaces `ENTRYPOINT`
+outright, and both Job yamls here set it explicitly.
+
 ## 3. Push it
 
 `build.sh` deliberately never runs `docker push` itself — it prints the exact
