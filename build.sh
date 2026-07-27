@@ -34,6 +34,23 @@ ask() {  # ask PROMPT DEFAULT -> prints the chosen value
   echo "${reply:-$default}"
 }
 
+esc_repl() {  # escape a string for use as a sed s### REPLACEMENT
+  # Answers are free-form text (a shell command, a model name). Unescaped, two
+  # characters break the substitutions below:
+  #   &  means "the whole match" in a sed replacement, so a batch command of
+  #      `python a.py && python b.py` silently becomes
+  #      `python a.py <COMMAND><COMMAND> python b.py` — plausible-looking yaml
+  #      that runs garbage.
+  #   #  is the delimiter used below, so it aborts sed outright ("unknown option
+  #      to `s'"), after the docker build has already succeeded.
+  # Order matters: backslash first, or it double-escapes what follows.
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//&/\\&}"
+  s="${s//#/\\#}"
+  printf '%s' "$s"
+}
+
 confirm() {  # confirm PROMPT DEFAULT(y/n) -> exit status 0 = yes
   local prompt="$1" default="${2:-y}" reply
   read -r -p "${prompt} [${default}]: " reply || true
@@ -318,16 +335,16 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
     # above: :latest for personal, :$USERNAME for template) rather than
     # patching registry/tag piecemeal — the template's hardcoded tag is only
     # ever correct for one of the two modes it's shared between.
-    -e "s#^\(\s*\)image: .*#\1image: ${IMAGE}#"
+    -e "s#^\(\s*\)image: .*#\1image: $(esc_repl "${IMAGE}")#"
   )
   if [ -n "$EXTRA_VAR" ]; then
-    sed_args+=(-e "s#<${EXTRA_VAR}>#${EXTRA_VALUE}#g")
+    sed_args+=(-e "s#<${EXTRA_VAR}>#$(esc_repl "${EXTRA_VALUE}")#g")
   fi
   if [ "$WANT_SECRET" = 1 ]; then
     # Replace the marker with a real (uncommented) envFrom block — this
     # script never reads your .env file or sees any secret value, only the
     # Secret's name.
-    secret_block="          envFrom:\n            - secretRef:\n                name: ${SECRET_NAME}"
+    secret_block="          envFrom:\n            - secretRef:\n                name: $(esc_repl "${SECRET_NAME}")"
     sed_args+=(-e "s#.*<SECRET_ENV_HOOK>.*#${secret_block}#")
   else
     sed_args+=(-e "/<SECRET_ENV_HOOK>/d")

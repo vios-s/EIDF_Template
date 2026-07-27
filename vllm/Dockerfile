@@ -19,7 +19,13 @@
 #
 # See build.sh (repo root) for a one-liner and README.md for the full workflow.
 ###############################################################################
-FROM registry.eidf.ac.uk/docker-cache/vllm/vllm-openai:latest
+# Pinned, like the CUDA and PyTorch_Docker bases are. vLLM makes breaking CLI
+# and config changes between minor releases, so `:latest` silently moves the
+# ground under a rebuild. Check for newer tags with:
+#   curl -s 'https://hub.docker.com/v2/repositories/vllm/vllm-openai/tags/?page_size=25&ordering=last_updated' \
+#     | jq -r '.results[].name'
+# and bump this line when you actually intend to move.
+FROM registry.eidf.ac.uk/docker-cache/vllm/vllm-openai:v0.26.0
 
 LABEL maintainer="EIDF eidf105 group"
 LABEL description="vLLM OpenAI-compatible server for the EIDF GPU service"
@@ -76,3 +82,13 @@ EXPOSE 8000
 
 # No CMD/ENTRYPOINT override: the Kubernetes Job supplies the full
 # `vllm serve ...` command so the model and flags stay configurable per run.
+#
+# FOOTGUN, inherited from the base image, which sets
+# ENTRYPOINT ["vllm", "serve"]:
+#   docker run <image> bash        # does NOT give you a shell
+# It appends "bash" as an argument to `vllm serve` and dies with a completely
+# unrelated-looking "RuntimeError: Failed to infer device type". To get a shell
+# locally you must override the entrypoint:
+#   docker run --rm -it --entrypoint /bin/bash <image>
+# Kubernetes is unaffected: a pod spec's `command:` replaces ENTRYPOINT outright,
+# and both Job yamls here set it explicitly.

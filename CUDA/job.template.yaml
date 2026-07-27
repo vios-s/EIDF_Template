@@ -55,7 +55,15 @@ spec:
           #       name: my-env
           # <SECRET_ENV_HOOK>
           command: ["/bin/bash", "-c"]
-          args: ["<COMMAND>"]                 # e.g. "python train.py"
+          # Literal block scalar, NOT args: ["<COMMAND>"]. In the flow form the
+          # command sits inside double quotes, so any command containing one of
+          # its own — `python -c "print(1)"`, entirely ordinary — closes the
+          # string early and produces invalid YAML that kubectl rejects. A block
+          # scalar takes the line as-is, whatever is in it.
+          args:
+            - |
+              # e.g. python train.py
+              <COMMAND>
           resources:
             requests:
               cpu: 8
