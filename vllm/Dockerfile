@@ -19,7 +19,13 @@
 #
 # See build.sh (repo root) for a one-liner and README.md for the full workflow.
 ###############################################################################
-FROM registry.eidf.ac.uk/docker-cache/vllm/vllm-openai:latest
+# Pinned, like the CUDA and PyTorch_Docker bases are. vLLM makes breaking CLI
+# and config changes between minor releases, so `:latest` silently moves the
+# ground under a rebuild. Check for newer tags with:
+#   curl -s 'https://hub.docker.com/v2/repositories/vllm/vllm-openai/tags/?page_size=25&ordering=last_updated' \
+#     | jq -r '.results[].name'
+# and bump this line when you actually intend to move.
+FROM registry.eidf.ac.uk/docker-cache/vllm/vllm-openai:v0.26.0
 
 LABEL maintainer="EIDF eidf105 group"
 LABEL description="vLLM OpenAI-compatible server for the EIDF GPU service"
