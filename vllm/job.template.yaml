@@ -15,6 +15,11 @@ metadata:
   generateName: vllm-<USERNAME>-
   labels:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
+    # Ownership labels — keep these: they record whose Job this is and
+    # what it's for (e.g. kubectl get jobs -l owner=<you>).
+    owner: <USERNAME>
+    project: <PROJECT>
+    purpose: serving
 spec:
   parallelism: 1
   completions: 1
@@ -24,7 +29,9 @@ spec:
     metadata:
       labels:
         app: vllm
-        owner: <USERNAME>
+        owner: <USERNAME>            # kubectl get pods -l owner=<you>
+        project: <PROJECT>
+        purpose: serving
     spec:
       restartPolicy: Never
       # Run as YOUR uid/gid so NFS files are owned correctly.
@@ -41,6 +48,10 @@ spec:
           image: registry.eidf.ac.uk/eidf105/vllm-eidf:latest
           imagePullPolicy: Always
           env:
+            # Make Python's print()/logging appear in `kubectl logs`
+            # immediately instead of being buffered until exit.
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: MODEL
               value: "<MODEL>"                      # e.g. Qwen/Qwen2.5-7B-Instruct
             - name: HF_HOME

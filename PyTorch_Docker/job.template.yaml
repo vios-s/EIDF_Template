@@ -14,6 +14,11 @@ metadata:
   generateName: pytorch-<USERNAME>-
   labels:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
+    # Ownership labels — keep these: they record whose Job this is and
+    # what it's for (e.g. kubectl get jobs -l owner=<you>).
+    owner: <USERNAME>
+    project: <PROJECT>
+    purpose: interactive
 spec:
   parallelism: 1
   completions: 1
@@ -22,7 +27,9 @@ spec:
     metadata:
       labels:
         app: pytorch
-        owner: <USERNAME>
+        owner: <USERNAME>            # kubectl get pods -l owner=<you>
+        project: <PROJECT>
+        purpose: interactive
     spec:
       restartPolicy: Never
       # Run as YOUR uid/gid (find with `id` on the EIDF login VM) so files
@@ -43,6 +50,10 @@ spec:
           command: ["/bin/bash", "-c"]
           args: ["sleep infinity"]
           env:
+            # Make Python's print()/logging appear in `kubectl logs`
+            # immediately instead of being buffered until exit.
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: HF_HOME
               value: "/data/users/<USERNAME>/hf-cache"
             - name: TORCH_HOME

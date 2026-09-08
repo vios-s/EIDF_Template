@@ -330,6 +330,9 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
     -e "s#<USERNAME>#${USERNAME}#g"
     -e "s#<USER_ID>#${USER_ID}#g"
     -e "s#<GROUP_ID>#${GROUP_ID}#g"
+    # Fills the eidf.ac.uk/project usage-accounting label (same id as the
+    # registry project for this group).
+    -e "s#<PROJECT>#${PROJECT}#g"
     -e "s#eidf105ns#${NAMESPACE}#g"
     # Replace the whole image line with $IMAGE (already computed per-mode
     # above: :latest for personal, :$USERNAME for template) rather than
@@ -351,6 +354,14 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
   fi
   sed "${sed_args[@]}" "$JOB_TEMPLATE_FILE" > "$JOB_OUT"
   echo ">> Wrote ${DIR}/${JOB_OUT}"
+
+  # If kubmonitor is installed, check the generated Job against the group's
+  # usage-accounting label contract (kubmonitor_cli docs/LABELS.md). Purely
+  # advisory — the build already succeeded.
+  if command -v kubmonitor >/dev/null 2>&1; then
+    kubmonitor validate "$JOB_OUT" || \
+      echo ">> WARNING: ${JOB_OUT} does not satisfy the usage-accounting label contract (see above)"
+  fi
 
   if [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ]; then
     SVC_OUT="service.${USERNAME}.yaml"

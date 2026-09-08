@@ -17,6 +17,10 @@ project, `registry.eidf.ac.uk/eidf105/`.
 Each folder has its own README with the full build/deploy workflow. All three
 follow the same pattern:
 
+- **Ownership labels**: every Job template carries `owner`, `project` and
+  `purpose` labels (filled in by the wizard), so it's always clear whose
+  workload is whose — handy for `kubectl get pods -l owner=<you>` and for
+  admins tidying up the shared namespace. Keep them if you hand-edit a Job.
 - **Non-root by default**: the image bakes in a user matching *your* EIDF NFS
   uid/gid (`id` on the login VM), so `kubectl exec -it` drops you in as
   yourself, not root, with read/write access to the NFS share.
@@ -55,6 +59,34 @@ follow the same pattern:
   `kubectl create secret generic <name> --from-env-file=<path>`. Never put a
   real token in a Dockerfile or any committed file — see each folder's
   "Managing secrets" section.
+
+## Checking your job's logs
+
+Anything your job writes to **stdout/stderr** is visible live, without
+touching the NFS:
+
+```bash
+kubectl -n eidf105ns logs -f <pod-name>        # follow live
+kubectl -n eidf105ns logs <pod-name> --tail=200
+```
+
+or interactively: run [`kubmonitor eidf105ns`](https://github.com/vios-s/kubmonitor_cli),
+arrow-key onto your pod and press **Enter** for a scrollable, auto-refreshing
+log view (`u` shows GPU allocation per user).
+
+To make sure your output actually shows up there:
+
+- **Just `print()` / `logging` normally** — stdout is the pod log. Don't
+  redirect everything into a file on the NFS or you'll be blind in
+  `kubectl logs`; if you want a file too, `tee` it:
+  `python train.py 2>&1 | tee /data/users/<you>/run.log`.
+- The templates already set `PYTHONUNBUFFERED=1`, so Python output
+  appears immediately (no need for `python -u` or `flush=True`).
+- `tqdm` progress bars write to stderr and show up fine — but prefer a
+  sensible update interval (`miniters`/`mininterval`) so the log isn't
+  99% carriage returns.
+- Crashed pod? `kubectl -n eidf105ns logs <pod-name> --previous` shows
+  the logs of the previous attempt.
 
 ## If you're a new colleague picking this up
 

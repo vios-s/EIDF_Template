@@ -11,9 +11,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: vllm-dev-
+  generateName: vllm-dev-<USERNAME>-
   labels:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
+    # Ownership labels — keep these: they record whose Job this is and
+    # what it's for (e.g. kubectl get jobs -l owner=<you>).
+    owner: <USERNAME>
+    project: <PROJECT>
+    purpose: interactive
 spec:
   parallelism: 1
   completions: 1
@@ -22,7 +27,9 @@ spec:
     metadata:
       labels:
         app: vllm-dev
-        owner: <USERNAME>
+        owner: <USERNAME>            # kubectl get pods -l owner=<you>
+        project: <PROJECT>
+        purpose: interactive
     spec:
       restartPolicy: Never
       securityContext:
@@ -37,6 +44,10 @@ spec:
           command: ["/bin/bash", "-c"]
           args: ["echo 'Pod ready — exec in and run vllm serve'; sleep infinity"]
           env:
+            # Make Python's print()/logging appear in `kubectl logs`
+            # immediately instead of being buffered until exit.
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: HF_HOME
               value: "/data/users/<USERNAME>/hf-cache"
             - name: HF_XET_HIGH_PERFORMANCE
