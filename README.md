@@ -60,6 +60,17 @@ follow the same pattern:
   real token in a Dockerfile or any committed file — see each folder's
   "Managing secrets" section.
 
+## Using an AI assistant
+
+This repo ships a Claude Code skill (`.claude/skills/eidf-job/`). If you
+use Claude Code, `cd` into this repo and just ask for what you need —
+"make me a job file to train X on 2 H100s", "give me a pod I can exec
+into", "serve this model with vllm" — and it will fill the right
+template with your real uid/gid and the ownership labels, instead of
+inventing Kubernetes YAML from memory. It also knows the secrets rules
+(tokens go in a Secret, never in the yaml) and checks its own output.
+You still review and `kubectl create` the file yourself.
+
 ## Checking your job's logs
 
 Anything your job writes to **stdout/stderr** is visible live, without
