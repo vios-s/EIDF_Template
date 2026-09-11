@@ -39,6 +39,18 @@ These files end up in a shared namespace and shared repos, read by
 teammates and admins who may not share the user's language. (Replying
 to the user in their own language is of course fine.)
 
+## Which namespace?
+
+Everything below says `eidf105ns` — the right default for this group.
+The skill generalises though: EIDF naming is regular, project `eidfXXX`
+→ namespace `eidfXXXns` → kueue queue `eidfXXXns-user-queue` →
+`project` label `eidfXXX`. If the user belongs to a different EIDF
+project, swap all of those *consistently* (including the hardcoded
+`eidf105ns` strings inside the templates — build.sh does this
+substitution when run interactively). You cannot list namespaces on
+this cluster, so when in doubt ask the user for their project code and
+confirm access with `kubectl -n <namespace> get resourcequota`.
+
 ## Step 1 — locate the EIDF_Template repo
 
 In order of preference:
