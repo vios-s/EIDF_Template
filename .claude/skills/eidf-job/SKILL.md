@@ -141,14 +141,30 @@ Copy the template to `job.<username>.yaml` and replace **all** of:
 | `<SECRET_ENV_HOOK>` | see Step 6 |
 
 A leftover `<ANYTHING>` makes kubectl reject the file or, worse, ships a
-literal `<USERNAME>` label. Grep for `<` before finishing. The
-`image:` line may need the user's own tag (ECIR convention
-`registry.eidf.ac.uk/eidf105/<image>:<username>`); ask if unclear.
-If the user has never built their personal image, the pod can't pull it —
-point them at `./build.sh` (interactive wizard) first, or mention it in
-your hand-over notes so the first `kubectl create` isn't a surprise
-ImagePullBackOff. (The vllm template uses the shared `:latest` image, so
-it works without a personal build.)
+literal `<USERNAME>` label. Grep for `<` before finishing.
+
+**The image can come from anywhere — don't push people to ECIR.** Both
+registries work and the choice is the user's:
+
+- **Docker Hub** (`docker.io/<account>/<image>:<tag>` or just
+  `<account>/<image>:<tag>`): public images pull with zero setup — many
+  in the group work this way. Leave the template's `imagePullSecrets`
+  line in place; it's harmless for Docker Hub pulls. A *private* Docker
+  Hub image needs the user's own pull secret
+  (`kubectl create secret docker-registry ...`) added to
+  `imagePullSecrets`.
+- **ECIR** (`registry.eidf.ac.uk/eidf105/<image>:<username>`): the
+  group registry the templates default to. Pulls work out of the box
+  via the shared robot secret, but the user must have pushed a personal
+  image first (`./build.sh` wizard) — otherwise the first deploy ends
+  in ImagePullBackOff, so flag it in your hand-over notes. ECIR also
+  has storage quota limits; if it's full, Docker Hub is the documented
+  fallback (see CONTRIBUTING.md).
+
+If the user already has a working image anywhere, use it as-is — never
+make them re-publish to a different registry just for a job file. (The
+vllm template uses the shared `:latest` ECIR image, so it works without
+any personal build.)
 
 ## Step 5 — resources and GPU choice
 
