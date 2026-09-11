@@ -52,11 +52,27 @@ In order of preference:
 | the command / model | user's request |
 | secrets needed? | if the workload needs an HF token, W&B key, etc. |
 
+**Scan before you ask.** Most sizing facts are discoverable — prefer a
+quick scan over a questionnaire:
+
+```bash
+kubectl -n eidf105ns describe resourcequota   # GPUs/CPUs used vs quota RIGHT NOW
+kubectl -n eidf105ns get localqueue eidf105ns-user-queue   # queue pressure
+```
+
+Fold what you see into the recommendation ("10/12 GPUs are in use, a
+4-GPU job will queue — 2 GPUs would start now"). If the user's project
+code is at hand, read the obvious signals instead of asking: the model
+name/size in their configs, `num_workers` (drives CPU count),
+batch size and precision (drive VRAM). When unsure about the current
+GPU lineup, check <https://docs.eidf.ac.uk/services/gpuservice/>.
+
 **Right-size instead of defaulting.** If the user didn't specify
 resources — or their numbers look badly mismatched to the task — ask
-one round of short questions (which model / roughly how many
-parameters, training or inference, full fine-tune / LoRA / just
-serving, how many runs in parallel) and recommend a fit. Rough VRAM
+one round of short questions for whatever the scan couldn't answer
+(which model / roughly how many parameters, training or inference,
+full fine-tune / LoRA / just serving, how many runs in parallel) and
+recommend a fit. Rough VRAM
 math per model parameter: inference ≈ 2 bytes (bf16) plus ~20%
 overhead; LoRA/QLoRA fine-tune ≈ 2–4 bytes; full fine-tune with Adam ≈
 16–18 bytes. So a 7B model serves on a 40GB A100, LoRA-tunes on one
