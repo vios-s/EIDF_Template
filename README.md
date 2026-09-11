@@ -1,4 +1,4 @@
-# EIDF GPU Service configs (eidf105)
+# EIDF GPU Service configs
 
 Docker + Kubernetes templates for running GPU workloads on the
 [EIDF GPU Service](https://docs.eidf.ac.uk/services/gpuservice/), namespace
