@@ -72,8 +72,9 @@ resources — or their numbers look badly mismatched to the task — ask
 one round of short questions for whatever the scan couldn't answer
 (which model / roughly how many parameters, training or inference,
 full fine-tune / LoRA / just serving, how many runs in parallel) and
-recommend a fit. Rough VRAM
-math per model parameter: inference ≈ 2 bytes (bf16) plus ~20%
+recommend a fit.
+
+Rough VRAM math per model parameter: inference ≈ 2 bytes (bf16) plus ~20%
 overhead; LoRA/QLoRA fine-tune ≈ 2–4 bytes; full fine-tune with Adam ≈
 16–18 bytes. So a 7B model serves on a 40GB A100, LoRA-tunes on one
 80GB card, but full-tunes only sharded across many. Point small
@@ -150,26 +151,6 @@ it works without a personal build.)
 - For batch jobs, offer `ttlSecondsAfterFinished: 1800` on the Job spec
   so finished jobs clean themselves up (the docs recommend it).
 
-## If the job won't start (Pending / no GPUs of that type)
-
-Users can NOT list cluster nodes (`kubectl get nodes` is Forbidden), so
-you cannot check free GPUs directly. What you *can* do:
-
-```bash
-kubectl -n eidf105ns get localqueue eidf105ns-user-queue   # queue pressure
-kubectl -n eidf105ns get workloads                          # is it admitted by kueue?
-kubectl -n eidf105ns describe pod <pod>                     # scheduler events
-```
-
-Read the signals: workload not admitted → quota/queue congestion (wait
-or shrink the request); admitted but pod `Unschedulable` with "node(s)
-didn't match" → the GPU type is misspelled, unavailable to this
-namespace, or fully occupied. In that case propose the fallback ladder
-**H200 → H100-80GB → A100-80GB → A100-40GB → MIG slice**, and be
-explicit about the VRAM step-down (e.g. a model chosen for H200's 141GB
-may need a smaller batch, sharding, or quantization on an 80GB card) —
-let the user decide rather than silently downgrading.
-
 ## Step 6 — secrets are never written into YAML
 
 If the job needs an HF token / API key, do NOT paste it into the yaml,
@@ -193,7 +174,10 @@ If no secrets are needed, just delete the `<SECRET_ENV_HOOK>` line.
 
 1. If `kubmonitor` is installed, run `kubmonitor validate job.<username>.yaml`
    — it confirms the ownership labels survived. Fix anything it reports.
-2. Give the user the deploy commands:
+2. `kubectl -n eidf105ns create --dry-run=server -f job.<username>.yaml`
+   runs the file through the real admission chain (kueue included)
+   without creating anything — a free catch for schema mistakes.
+3. Give the user the deploy commands:
 
 ```bash
 kubectl -n eidf105ns create -f job.<username>.yaml
@@ -201,6 +185,26 @@ kubectl -n eidf105ns get pods -l owner=<username> -w
 kubectl -n eidf105ns logs -f <pod-name>        # batch/serving
 kubectl -n eidf105ns exec -it <pod-name> -- /bin/bash   # interactive
 ```
+
+## If the job won't start (Pending / no GPUs of that type)
+
+Users can NOT list cluster nodes (`kubectl get nodes` is Forbidden), so
+you cannot check free GPUs directly. What you *can* do:
+
+```bash
+kubectl -n eidf105ns get localqueue eidf105ns-user-queue   # queue pressure
+kubectl -n eidf105ns get workloads                          # is it admitted by kueue?
+kubectl -n eidf105ns describe pod <pod>                     # scheduler events
+```
+
+Read the signals: workload not admitted → quota/queue congestion (wait
+or shrink the request); admitted but pod `Unschedulable` with "node(s)
+didn't match" → the GPU type is misspelled, unavailable to this
+namespace, or fully occupied. In that case propose the fallback ladder
+**H200 → H100-80GB → A100-80GB → A100-40GB → MIG slice**, and be
+explicit about the VRAM step-down (e.g. a model chosen for H200's 141GB
+may need a smaller batch, sharding, or quantization on an 80GB card) —
+let the user decide rather than silently downgrading.
 
 ## Editing an existing job.<user>.yaml
 

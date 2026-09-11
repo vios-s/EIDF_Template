@@ -62,36 +62,57 @@ follow the same pattern:
 
 ## Using an AI assistant
 
-This repo ships a Claude Code skill (`.claude/skills/eidf-job/`): ask
-for what you need in plain English — "make me a job file to train X on
-2 H100s", "give me a pod I can exec into", "serve this model with
-vllm", "bump my job to 4 GPUs" — and it fills the right template with
-your real uid/gid and the ownership labels, instead of inventing
-Kubernetes YAML from memory. It knows the secrets rules (tokens go in a
-Secret, never in the yaml) and checks its own output. You still review
-and `kubectl create` the file yourself.
+This repo ships a Claude Code skill (`.claude/skills/eidf-job/`) that
+teaches the AI our cluster's rules, so instead of inventing Kubernetes
+YAML from memory it fills the group templates with your real uid/gid and
+the ownership labels, right-sizes the resources, and checks its own
+output. You still review and `kubectl create` the file yourself.
 
-Two ways to use it:
+### Install (pick one)
 
-1. **Inside this repo (zero setup).** Clone the repo, `cd` in, run
-   Claude Code. The skill loads automatically — best when starting a
-   new job from scratch.
+- **Zero setup**: clone this repo, `cd` in, run Claude Code — the skill
+  loads automatically. Best when starting a new job from scratch.
+- **One-time personal install** — works from *any* directory afterwards
+  (including your own projects and existing `job.<you>.yaml` files):
 
-2. **From your own project (one-time install).** Copy the skill to your
-   personal skills folder and it works in any directory — including
-   editing the `job.<you>.yaml` you already have (it preserves and, if
-   missing, adds the ownership labels while making your change):
+  ```bash
+  mkdir -p ~/.claude/skills/eidf-job
+  curl -fsSL https://raw.githubusercontent.com/vios-s/EIDF_Template/main/.claude/skills/eidf-job/SKILL.md \
+    -o ~/.claude/skills/eidf-job/SKILL.md
+  ```
 
-   ```bash
-   mkdir -p ~/.claude/skills/eidf-job
-   curl -fsSL https://raw.githubusercontent.com/vios-s/EIDF_Template/main/.claude/skills/eidf-job/SKILL.md \
-     -o ~/.claude/skills/eidf-job/SKILL.md
-   ```
+  Or simply tell Claude Code: *"install the eidf-job skill from the
+  vios-s/EIDF_Template repo"* — it does the copy for you. Re-run either
+  to update.
 
-   Or just tell Claude Code: *"install the eidf-job skill from the
-   vios-s/EIDF_Template repo"* — it will do the copy for you. When a
-   task needs a template you don't have locally, the skill clones this
-   repo by itself.
+### What you can ask
+
+Plain English is enough — some examples that all work:
+
+- "make me a job to train my model on 2 H100s, command is `python train.py`"
+- "give me a pod I can exec into to debug cuda kernels"
+- "serve Qwen2.5-7B with vllm on one GPU"
+- "bump my job to 4 GPUs and 128Gi" *(edits your existing yaml, keeps the labels)*
+- "set up a job for my experiment, not sure what resources I need"
+- "my job's been Pending for an hour, why?"
+
+### What it does for you
+
+- **Right-sizing**: scans your config files (model size, `num_workers`,
+  batch size) and the live namespace quota/queue before recommending
+  GPUs/CPU/memory — and tells you when a request can never schedule
+  (e.g. >12 GPUs). Your own numbers always win if you insist.
+- **GPU picking**: knows the full `nvidia.com/gpu.product` list from the
+  [EIDF docs](https://docs.eidf.ac.uk/services/gpuservice/) including
+  MIG slices for small/debug jobs, that a misspelled value pends
+  forever, and the fallback ladder when your first choice is scarce.
+- **Pending-job triage**: reads kueue admission + pod events to tell
+  "quota queueing" apart from "wrong/unavailable GPU type".
+- **Secrets discipline**: tokens go into a K8s Secret via `envFrom`,
+  never into the yaml or the chat.
+- **Self-checks**: `kubmonitor validate` (ownership labels) and a
+  server-side `--dry-run` through the real admission chain before it
+  hands you the file.
 
 ## Checking your job's logs
 
