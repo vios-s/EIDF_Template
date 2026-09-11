@@ -33,6 +33,12 @@ YAML almost always gets something wrong that the templates get right:
 So: **locate the templates, fill the placeholders, keep everything you
 don't have a reason to change.**
 
+One more group convention: whatever language the user chats in, write
+all generated *files* — yaml, comments inside it, notes — in English.
+These files end up in a shared namespace and shared repos, read by
+teammates and admins who may not share the user's language. (Replying
+to the user in their own language is of course fine.)
+
 ## Step 1 — locate the EIDF_Template repo
 
 In order of preference:
