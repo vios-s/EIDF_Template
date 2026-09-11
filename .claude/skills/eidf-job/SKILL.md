@@ -127,6 +127,23 @@ trade-off in one sentence and move on; it's their job, not yours.
 The `purpose` label is already correct inside each template — don't
 change it, it describes the template's job type.
 
+**Keep interactive pods honest.** A common anti-pattern here is
+starting a job whose only purpose is to `kubectl exec` in later — the
+GPU stays allocated whether or not anything runs on it, and idle
+allocations are plainly visible to everyone on the shared cluster. So
+when someone asks for an interactive GPU pod:
+
+- Ask what they would actually run after exec'ing in. If it's a
+  concrete command, offer the **batch** template with that command
+  instead: it logs to `kubectl logs`, survives SSH disconnects, and
+  frees the GPU the moment it finishes.
+- Interactive is legitimate for genuinely exploratory work (debugging
+  kernels, inspecting data, trying things). Then suggest a **MIG
+  slice** unless they need serious VRAM, and add
+  `activeDeadlineSeconds: 86400` (24h) to the generated Job so a
+  forgotten pod can't squat a GPU for a week — tell the user it's
+  there and that they can raise it or resubmit when it expires.
+
 ## Step 4 — fill every placeholder, change nothing else
 
 Copy the template to `job.<username>.yaml` and replace **all** of:
