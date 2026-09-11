@@ -48,9 +48,25 @@ In order of preference:
 |---|---|
 | username, uid, gid | `id -un`, `id -u`, `id -g` on this login VM — do NOT guess |
 | what kind of job | infer from the request (see Step 3), confirm if ambiguous |
-| GPU model + count | user's request; default 1× H100 if unstated |
+| GPU model + count | user's request, or recommend one (see below) |
 | the command / model | user's request |
 | secrets needed? | if the workload needs an HF token, W&B key, etc. |
+
+**Right-size instead of defaulting.** If the user didn't specify
+resources — or their numbers look badly mismatched to the task — ask
+one round of short questions (which model / roughly how many
+parameters, training or inference, full fine-tune / LoRA / just
+serving, how many runs in parallel) and recommend a fit. Rough VRAM
+math per model parameter: inference ≈ 2 bytes (bf16) plus ~20%
+overhead; LoRA/QLoRA fine-tune ≈ 2–4 bytes; full fine-tune with Adam ≈
+16–18 bytes. So a 7B model serves on a 40GB A100, LoRA-tunes on one
+80GB card, but full-tunes only sharded across many. Point small
+debug/test workloads at MIG slices. Remember the project quota (~12
+GPUs shared by the whole group): N parallel runs × G GPUs each all
+count against it, so recommend the smallest setup that works and
+staggering runs when someone wants a big sweep. If the user hears the
+recommendation and still wants their own numbers, use theirs — say the
+trade-off in one sentence and move on; it's their job, not yours.
 
 ## Step 3 — pick the template by purpose
 
@@ -87,16 +103,56 @@ your hand-over notes so the first `kubectl create` isn't a surprise
 ImagePullBackOff. (The vllm template uses the shared `:latest` image, so
 it works without a personal build.)
 
-## Step 5 — resources
+## Step 5 — resources and GPU choice
 
 - Keep `requests` and `limits` **identical** (cluster convention).
 - Scale cpu/memory with the GPU count within one node
   (rule of thumb: 8 CPU + 32Gi per GPU; vllm wants more memory).
-- GPU model goes in the `nodeSelector`. Valid values include:
-  `NVIDIA-H200`, `NVIDIA-H100-80GB-HBM3`, `NVIDIA-A100-SXM4-80GB`,
-  `NVIDIA-A100-SXM4-40GB`.
+  Default project quota is ~100 CPU / 1 TiB / **12 GPUs** — requests
+  beyond the quota just queue.
+- GPU model goes in the `nodeSelector`. The authoritative list lives at
+  <https://docs.eidf.ac.uk/services/gpuservice/> (see also
+  `training/L1_getting_started/`); as of 2025 the valid
+  `nvidia.com/gpu.product` values are:
+
+  | Value | VRAM | Notes |
+  |---|---|---|
+  | `NVIDIA-H200` | 141GB | only 16 in the whole service — scarce |
+  | `NVIDIA-H100-80GB-HBM3` | 80GB | plentiful but high demand |
+  | `NVIDIA-A100-SXM4-80GB` | 80GB | good fallback |
+  | `NVIDIA-A100-SXM4-40GB` | 40GB | fine for small models |
+  | `NVIDIA-A100-SXM4-40GB-MIG-3g.20gb` | 20GB slice | small jobs |
+  | `NVIDIA-A100-SXM4-40GB-MIG-1g.5gb` | 5GB slice | debugging/tests |
+
+  A **misspelled value never schedules** — the pod sits Pending forever
+  with no loud error, so copy exactly. Omitting the nodeSelector gives a
+  *random* GPU type. For debug/interactive pods that mostly compile or
+  test code, suggest a MIG slice instead of a whole H100 — it queues
+  faster and doesn't burn a scarce GPU.
 - `/dev/shm` (`dshm` volume `sizeLimit`) matters for PyTorch dataloaders —
   grow it with memory if the user hits shm errors.
+- For batch jobs, offer `ttlSecondsAfterFinished: 1800` on the Job spec
+  so finished jobs clean themselves up (the docs recommend it).
+
+## If the job won't start (Pending / no GPUs of that type)
+
+Users can NOT list cluster nodes (`kubectl get nodes` is Forbidden), so
+you cannot check free GPUs directly. What you *can* do:
+
+```bash
+kubectl -n eidf105ns get localqueue eidf105ns-user-queue   # queue pressure
+kubectl -n eidf105ns get workloads                          # is it admitted by kueue?
+kubectl -n eidf105ns describe pod <pod>                     # scheduler events
+```
+
+Read the signals: workload not admitted → quota/queue congestion (wait
+or shrink the request); admitted but pod `Unschedulable` with "node(s)
+didn't match" → the GPU type is misspelled, unavailable to this
+namespace, or fully occupied. In that case propose the fallback ladder
+**H200 → H100-80GB → A100-80GB → A100-40GB → MIG slice**, and be
+explicit about the VRAM step-down (e.g. a model chosen for H200's 141GB
+may need a smaller batch, sharding, or quantization on an 80GB card) —
+let the user decide rather than silently downgrading.
 
 ## Step 6 — secrets are never written into YAML
 
