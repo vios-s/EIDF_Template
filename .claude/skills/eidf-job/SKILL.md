@@ -91,9 +91,9 @@ kubectl -n eidf105ns get localqueue eidf105ns-user-queue   # queue pressure
 ```
 
 Fold what you see into the recommendation ("10/12 GPUs are in use, a
-4-GPU job will queue — 2 GPUs would start now"). If the user's project
-code is at hand, read the obvious signals instead of asking: the model
-name/size in their configs, `num_workers` (drives CPU count),
+4-GPU job will queue — 2 GPUs would start now"). If the user's training
+code/configs are at hand, read the obvious signals instead of asking:
+the model name/size in their configs, `num_workers` (drives CPU count),
 batch size and precision (drive VRAM). When unsure about the current
 GPU lineup, check <https://docs.eidf.ac.uk/services/gpuservice/>.
 
@@ -135,7 +135,7 @@ Copy the template to `job.<username>.yaml` and replace **all** of:
 |---|---|
 | `<USERNAME>` | login account from `id -un` |
 | `<USER_ID>` / `<GROUP_ID>` | from `id -u` / `id -g` |
-| `<PROJECT>` | `eidf105` unless told otherwise |
+| `<PROJECT>` | the project code from "Which namespace?" (here `eidf105`) |
 | `<COMMAND>` | the user's command (CUDA batch template; it sits in a YAML block scalar, so quotes inside it are safe) |
 | `<MODEL>` | HF model id (vllm template) |
 | `<SECRET_ENV_HOOK>` | see Step 6 |
