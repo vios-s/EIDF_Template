@@ -47,9 +47,21 @@ The skill generalises though: EIDF naming is regular, project `eidfXXX`
 `project` label `eidfXXX`. If the user belongs to a different EIDF
 project, swap all of those *consistently* (including the hardcoded
 `eidf105ns` strings inside the templates — build.sh does this
-substitution when run interactively). You cannot list namespaces on
-this cluster, so when in doubt ask the user for their project code and
-confirm access with `kubectl -n <namespace> get resourcequota`.
+substitution when run interactively).
+
+You cannot list namespaces on this cluster, and the shared kubeconfig
+(`/kubernetes/config`) carries no namespace either — but EIDF login VMs
+are named after their project, so the code is auto-detectable locally:
+
+```bash
+hostname          # eidf105-vios.vms... -> project eidf105
+ls -d /home/eidf*  # /home/eidf105 -> same answer
+```
+
+Derive the namespace from that, confirm with
+`kubectl -n <namespace> get resourcequota` (succeeds only where the
+user has access), and ask the user only if those signals disagree or
+are absent (e.g. running from a laptop instead of the login VM).
 
 ## Step 1 — locate the EIDF_Template repo
 
