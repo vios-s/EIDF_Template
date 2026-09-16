@@ -184,7 +184,8 @@ Copy the template to `job.<username>.<project>.yaml` and replace **all** of:
 
 | Placeholder | Value |
 |---|---|
-| `<USERNAME>` | login account from `id -un` |
+| `<USERNAME>` | login account from `id -un`, **exactly as-is** — this fills the `owner` label and the `/data/users/` path |
+| `<USERNAME_SAFE>` | the same account folded to a legal resource name: lowercase, `_` → `-` (so `ada_lovelace` → `ada-lovelace`). Fills `generateName` and the Service `name` |
 | `<USER_ID>` / `<GROUP_ID>` | from `id -u` / `id -g` |
 | `<RESEARCH_PROJECT>` | the research project from Step 2 (e.g. `mri_recon`) — ask, never derive from the namespace |
 | `<COMMAND>` | the user's command (CUDA batch template; it sits in a YAML block scalar, so quotes inside it are safe) |
@@ -193,6 +194,20 @@ Copy the template to `job.<username>.<project>.yaml` and replace **all** of:
 
 A leftover `<ANYTHING>` makes kubectl reject the file or, worse, ships a
 literal `<USERNAME>` label. Grep for `<` before finishing.
+
+**`<USERNAME>` and `<USERNAME_SAFE>` are not interchangeable**, and the two
+ways of getting it wrong fail very differently:
+
+- account in a *name* (`generateName: cuda-ada_lovelace-`) → the API server
+  refuses to create the Job at all: resource names are RFC 1123 subdomains,
+  which allow neither `_` nor uppercase.
+- folded form in the *`owner` label* (`owner: ada-lovelace`) → the Job runs
+  fine and nothing complains, but it is attributed to an account that does
+  not exist, so the person's usage quietly goes missing from reports.
+
+For most accounts the two are identical, which is exactly why this is easy
+to miss — it only breaks for the teammates whose account has a `_` or a
+capital in it. When they differ, say so in your hand-over notes.
 
 **The image can come from anywhere — don't push people to ECIR.** Both
 registries work and the choice is the user's:
