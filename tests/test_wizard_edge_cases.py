@@ -233,17 +233,47 @@ CASES = [
      "rejected", None),
 ]
 
+# `existing` mode (no build) asks a different set of questions: no registry
+# or ECIR project, one image reference instead. Same labels must still land.
+def E(image="myacct/my-image:v2", user="rasin", research="mri_recon"):
+    fields = [user, "5001", "5001", "eidf105ns", image, research,
+              "1", "n", "y"]
+    out = []
+    for f in fields:
+        out.extend(f if isinstance(f, list) else [f])
+    return out
+
+
+EXISTING_CASES = [
+    ("existing image, no build", E(), "valid",
+     {"project": "mri_recon", "owner": "rasin"}),
+    ("existing image, account with underscore", E(user="ada_lovelace"),
+     "valid", {"owner": "ada_lovelace"}),
+    ("existing image, empty reference then corrected",
+     E(image=["", "myacct/my-image:v2"]), "valid", None),
+]
+
+def report(label, problems):
+    if problems:
+        print(f"\n[FAIL] {label}")
+        for p in problems:
+            print(f"       - {p}")
+        return 1
+    print(f"[ok]   {label}")
+    return 0
+
+
 if __name__ == "__main__":
     failures = 0
     for name, answers, expect, labels in CASES:
         label, problems = run_case(name, answers, expect=expect,
                                    expect_labels=labels)
-        if problems:
-            failures += 1
-            print(f"\n[FAIL] {label}")
-            for p in problems:
-                print(f"       - {p}")
-        else:
-            print(f"[ok]   {label}")
-    print(f"\n{failures} of {len(CASES)} cases produced a broken manifest")
+        failures += report(label, problems)
+    # mode "4" = existing (personal/template/base/existing for cuda)
+    for name, answers, expect, labels in EXISTING_CASES:
+        label, problems = run_case(name, answers, expect=expect,
+                                   expect_labels=labels, mode="4")
+        failures += report(label, problems)
+    print(f"\n{failures} of {len(CASES) + len(EXISTING_CASES)} cases produced "
+          f"a broken manifest")
     sys.exit(1 if failures else 0)

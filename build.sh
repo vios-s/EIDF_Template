@@ -72,6 +72,20 @@ esc_repl() {  # escape a string for use as a sed s### REPLACEMENT
   printf '%s' "$s"
 }
 
+detect_group() {  # best-effort EIDF group code (eidfXXX) for this machine
+  # Hardcoding eidf105 makes every default wrong for any other EIDF group,
+  # even though EIDF naming is regular enough to just read it off the box.
+  # Deliberately NOT from kubectl: the shared kubeconfig carries no
+  # namespace (its context is `eidf-general-prod`), so it cannot answer this.
+  local code=""
+  # Login VMs are named <group>-<team>.vms.os.eidf.epcc.ed.ac.uk
+  code=$(hostname 2>/dev/null | grep -oE '^eidf[0-9]+' || true)
+  # Otherwise the group's shared home directory.
+  [ -n "$code" ] || code=$(ls -d /home/eidf[0-9]* 2>/dev/null | head -1 |
+                           grep -oE 'eidf[0-9]+' || true)
+  printf '%s' "$code"
+}
+
 name_safe() {  # name_safe ACCOUNT -> RFC 1123 subdomain-safe form
   # Kubernetes resource names (metadata.name, generateName, Service names)
   # must be lowercase alphanumeric with '-' or '.'. Account names here are
@@ -183,18 +197,36 @@ if [ "$INTERACTIVE" = 1 ]; then
   BASE_IMAGE_NAME="${TARGET_BASE_IMAGE_NAME[$TARGET]}"
   HAS_TEMPLATE="${TARGET_HAS_TEMPLATE[$TARGET]}"
 
+  # Read the group off the machine once, so namespace/registry-project
+  # defaults suit whoever is running this rather than always eidf105.
+  GROUP="$(detect_group)"
+  if [ -n "$GROUP" ]; then
+    echo
+    echo "Detected EIDF group: ${GROUP} (namespace ${GROUP}ns) — press Enter"
+    echo "to accept the defaults below, or type your own."
+  else
+    GROUP=eidf105
+  fi
+
   echo
   declare -a MODE_OPTIONS=("personal — your own image")
   [ "$HAS_TEMPLATE" = yes ] && MODE_OPTIONS+=("template — group template, tagged with your username")
   [ "$HAS_BASE" = yes ] && MODE_OPTIONS+=("base — maintainer only: rebuild the shared base image")
+  # Not every job needs an image built here. Plenty of people already have
+  # one on Docker Hub or elsewhere, and the templates are happy to point at
+  # it — the README and the eidf-job skill both say the registry is the
+  # user's choice. Without this option the wizard contradicted them by
+  # forcing a build nobody wanted just to get a job file out.
+  MODE_OPTIONS+=("existing — image is already published, just write the job yaml")
 
   if [ "${#MODE_OPTIONS[@]}" -gt 1 ]; then
-    echo "What do you want to build for '${TARGET}'?"
+    echo "What do you want to do for '${TARGET}'?"
     select opt in "${MODE_OPTIONS[@]}"; do
       case "$opt" in
         personal*) MODE=personal ;;
         template*) MODE=template ;;
         base*)     MODE=base ;;
+        existing*) MODE=existing ;;
       esac
       [ -n "${opt:-}" ] && break
     done
@@ -208,7 +240,7 @@ if [ "$INTERACTIVE" = 1 ]; then
     echo " Docker Hub username as the project to push there instead — see"
     echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
     REGISTRY=$(ask "Registry host" "${REGISTRY:-registry.eidf.ac.uk}")
-    PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
+    PROJECT=$(ask  "ECIR registry project" "${PROJECT:-$GROUP}")
     USERNAME="${USERNAME:-$(id -un)}"; USER_ID="${USER_ID:-$(id -u)}"; GROUP_ID="${GROUP_ID:-$(id -g)}"
   else
     USERNAME=$(ask "Your username"        "${USERNAME:-$(id -un)}")
@@ -229,7 +261,7 @@ if [ "$INTERACTIVE" = 1 ]; then
       echo "error: '${USERNAME}' has no characters usable in a resource name." >&2
       exit 1
     fi
-    NAMESPACE=$(ask "Kubernetes namespace" "eidf105ns")
+    NAMESPACE=$(ask "Kubernetes namespace" "${NAMESPACE:-${GROUP}ns}")
     # The namespace is substituted into the kueue queue-name LABEL, so an
     # answer that is not a legal DNS-1123 label produces a manifest the API
     # server rejects on the label, with a message that never mentions the
@@ -237,11 +269,23 @@ if [ "$INTERACTIVE" = 1 ]; then
     ask_valid NAMESPACE "Kubernetes namespace" \
       '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$' \
       "Namespaces are lowercase alphanumeric with '-' (max 63)."
-    echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
-    echo " Docker Hub username as the project to push there instead — see"
-    echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
-    REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
-    PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
+    if [ "$MODE" = existing ]; then
+      # Nothing is built or pushed, so registry/project never come up — the
+      # image is whatever the user already published, wherever that is.
+      echo "Which image should the job run? Any registry works: a Docker Hub"
+      echo "reference like <account>/<image>:<tag> pulls with no setup, and an"
+      echo "ECIR one (${REGISTRY:-registry.eidf.ac.uk}/${GROUP}/<image>:<tag>)"
+      echo "pulls via the shared robot secret already in the template."
+      IMAGE=$(ask "Image reference" "${IMAGE:-}")
+      ask_valid IMAGE "Image reference" '^[^[:space:]]+$' \
+        "An image reference cannot be empty or contain spaces."
+    else
+      echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
+      echo " Docker Hub username as the project to push there instead — see"
+      echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
+      REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
+      PROJECT=$(ask  "ECIR registry project" "${PROJECT:-$GROUP}")
+    fi
 
     # Deliberately a separate question from the ECIR project above. These are
     # different things that used to share one answer: PROJECT is where the
@@ -304,10 +348,15 @@ if [ "$INTERACTIVE" = 1 ]; then
     base)     IMAGE="${REGISTRY}/${PROJECT}/${BASE_IMAGE_NAME}:latest" ;;
     template) IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${USERNAME}" ;;
     personal) IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}:latest" ;;
+    existing) : ;;   # already asked for, verbatim
   esac
 
   echo
-  echo "About to build [${MODE}] for '${TARGET}':"
+  if [ "$MODE" = existing ]; then
+    echo "About to write the job yaml for '${TARGET}' (no build):"
+  else
+    echo "About to build [${MODE}] for '${TARGET}':"
+  fi
   echo "  image:  ${IMAGE}"
   if [ "$MODE" != base ]; then
     echo "  user:   ${USERNAME} (uid=${USER_ID}, gid=${GROUP_ID})"
@@ -317,7 +366,11 @@ if [ "$INTERACTIVE" = 1 ]; then
       && echo "          + ${DIR}/service.${USERNAME_SAFE}.yaml"
     [ "$WANT_SECRET" = 1 ] && echo "  secret: ${ENV_FILE} -> Secret '${SECRET_NAME}' (you create this yourself)"
   fi
-  echo "  (this only builds locally — you push it yourself afterward)"
+  if [ "$MODE" = existing ]; then
+    echo "  (nothing is built or pushed — the image above must already exist)"
+  else
+    echo "  (this only builds locally — you push it yourself afterward)"
+  fi
   echo
   if ! confirm "Proceed?" "y"; then
     echo "Aborted — nothing built."
@@ -398,8 +451,11 @@ case "$MODE" in
       --build-arg GROUP_ID="${GROUP_ID}" \
       -t "${IMAGE}" .
     ;;
+  existing)
+    echo ">> [${TARGET}] Using the published image ${IMAGE} — nothing to build"
+    ;;
 esac
-echo ">> Built ${IMAGE}"
+[ "$MODE" = existing ] || echo ">> Built ${IMAGE}"
 
 # --- interactive extra: write job (+ service) yaml -----------------------------
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
@@ -467,22 +523,27 @@ fi
 # --- next steps: push + deploy, printed, never run automatically -------------
 echo
 echo "== Next steps =="
-echo "1. Push it (this script never does this for you):"
-echo "     docker login ${REGISTRY}   # if not already logged in"
-echo "     docker push ${IMAGE}"
+# Numbered at run time: `existing` mode has nothing to push, so the push
+# step disappears rather than being printed as a no-op the user has to
+# work out they should skip.
+step=1
+if [ "$MODE" != existing ]; then
+  echo "${step}. Push it (this script never does this for you):"
+  echo "     docker login ${REGISTRY}   # if not already logged in"
+  echo "     docker push ${IMAGE}"
+  step=$((step + 1))
+fi
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
   if [ "$WANT_SECRET" = 1 ]; then
     echo
-    echo "2. Create the Secret from your .env file (this reads ${ENV_FILE} on"
+    echo "${step}. Create the Secret from your .env file (this reads ${ENV_FILE} on"
     echo "   YOUR machine when you run it — nothing from it passed through"
     echo "   this script):"
     echo "     kubectl -n ${NAMESPACE} create secret generic ${SECRET_NAME} --from-env-file=${ENV_FILE}"
-    echo
-    echo "3. Deploy:"
-  else
-    echo
-    echo "2. Deploy:"
+    step=$((step + 1))
   fi
+  echo
+  echo "${step}. Deploy:"
   echo "     kubectl -n ${NAMESPACE} create -f ${DIR}/${JOB_OUT}"
   [ -n "$SVC_OUT" ] && echo "     kubectl -n ${NAMESPACE} apply  -f ${DIR}/${SVC_OUT}"
   echo "     kubectl -n ${NAMESPACE} get pods -l owner=${USERNAME} -w"
