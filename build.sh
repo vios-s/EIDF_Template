@@ -39,6 +39,22 @@ ask() {  # ask PROMPT DEFAULT -> prints the chosen value
   echo "${reply:-$default}"
 }
 
+ask_valid() {  # ask_valid VAR PROMPT REGEX HINT -> re-asks until the answer matches
+  # A re-ask loop must not be infinite: `ask` returns the (possibly empty)
+  # default at EOF, so piping answers in — or closing stdin — would otherwise
+  # spin forever instead of failing. Give up after a few tries.
+  local var="$1" prompt="$2" pattern="$3" hint="$4" tries=0
+  until [[ "${!var}" =~ $pattern ]]; do
+    if [ "$tries" -ge 3 ]; then
+      echo "error: '${!var}' is not a valid ${prompt,,}. ${hint}" >&2
+      exit 1
+    fi
+    [ "$tries" -gt 0 ] || [ -n "${!var}" ] && echo "  ${hint}"
+    printf -v "$var" '%s' "$(ask "$prompt" "")"
+    tries=$((tries + 1))
+  done
+}
+
 esc_repl() {  # escape a string for use as a sed s### REPLACEMENT
   # Answers are free-form text (a shell command, a model name). Unescaped, two
   # characters break the substitutions below:
@@ -53,6 +69,21 @@ esc_repl() {  # escape a string for use as a sed s### REPLACEMENT
   s="${s//\\/\\\\}"
   s="${s//&/\\&}"
   s="${s//#/\\#}"
+  printf '%s' "$s"
+}
+
+name_safe() {  # name_safe ACCOUNT -> RFC 1123 subdomain-safe form
+  # Kubernetes resource names (metadata.name, generateName, Service names)
+  # must be lowercase alphanumeric with '-' or '.'. Account names here are
+  # not: `ada_lovelace` and mixed case both occur, and either one makes the
+  # API server reject the manifest. Fold to the nearest legal name; the
+  # `owner` label still carries the untouched account.
+  local s="${1,,}"
+  s="${s//[^a-z0-9.-]/-}"      # anything illegal (incl. '_') becomes '-'
+  s="${s:0:30}"                # leave room for the template's prefix and the
+                               # server's random suffix inside the 63-char cap
+  s="${s#"${s%%[a-z0-9]*}"}"   # trim leading non-alphanumerics
+  s="${s%"${s##*[a-z0-9]}"}"   # trim trailing non-alphanumerics
   printf '%s' "$s"
 }
 
@@ -183,7 +214,29 @@ if [ "$INTERACTIVE" = 1 ]; then
     USERNAME=$(ask "Your username"        "${USERNAME:-$(id -un)}")
     USER_ID=$(ask  "Your uid"              "${USER_ID:-$(id -u)}")
     GROUP_ID=$(ask "Your gid"              "${GROUP_ID:-$(id -g)}")
+    # runAsUser/runAsGroup are ints in the pod schema: a non-numeric answer
+    # produces yaml kubectl rejects with an opaque unmarshal error, long
+    # after the image has built.
+    ask_valid USER_ID  "Your uid" '^[0-9]+$' "It must be a number — find yours with \`id -u\`."
+    ask_valid GROUP_ID "Your gid" '^[0-9]+$' "It must be a number — find yours with \`id -g\`."
+    USERNAME_SAFE=$(name_safe "$USERNAME")
+    if [ "$USERNAME_SAFE" != "$USERNAME" ]; then
+      echo "  note: job/service names will use '${USERNAME_SAFE}' —"
+      echo "  Kubernetes resource names allow neither '_' nor uppercase."
+      echo "  The 'owner' label keeps your real account '${USERNAME}'."
+    fi
+    if [ -z "$USERNAME_SAFE" ]; then
+      echo "error: '${USERNAME}' has no characters usable in a resource name." >&2
+      exit 1
+    fi
     NAMESPACE=$(ask "Kubernetes namespace" "eidf105ns")
+    # The namespace is substituted into the kueue queue-name LABEL, so an
+    # answer that is not a legal DNS-1123 label produces a manifest the API
+    # server rejects on the label, with a message that never mentions the
+    # namespace.
+    ask_valid NAMESPACE "Kubernetes namespace" \
+      '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$' \
+      "Namespaces are lowercase alphanumeric with '-' (max 63)."
     echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
     echo " Docker Hub username as the project to push there instead — see"
     echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
@@ -205,15 +258,9 @@ if [ "$INTERACTIVE" = 1 ]; then
     RESEARCH_PROJECT=$(ask "Research project" "${RESEARCH_PROJECT:-}")
     # A label value k8s would reject fails at `kubectl create`, long after this
     # script has exited successfully — so catch it here, while we can re-ask.
-    until [[ "$RESEARCH_PROJECT" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$ ]]; do
-      if [ -z "$RESEARCH_PROJECT" ]; then
-        echo "  Required — the label has no useful default."
-      else
-        echo "  '${RESEARCH_PROJECT}' is not a valid label value: use letters,"
-        echo "  digits, '-', '_' or '.', starting and ending alphanumeric (max 63)."
-      fi
-      RESEARCH_PROJECT=$(ask "Research project" "")
-    done
+    ask_valid RESEARCH_PROJECT "Research project" \
+      '^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$' \
+      "Use letters, digits, '-', '_' or '.', starting and ending alphanumeric (max 63)."
 
     count="${JOBMODE_COUNT[$TARGET]}"
     JOB_MODE_IDX=1
@@ -265,9 +312,9 @@ if [ "$INTERACTIVE" = 1 ]; then
   if [ "$MODE" != base ]; then
     echo "  user:   ${USERNAME} (uid=${USER_ID}, gid=${GROUP_ID})"
     echo "  study:  ${RESEARCH_PROJECT} (fills the 'project' label)"
-    echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME}.${RESEARCH_PROJECT}.yaml"
+    echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME_SAFE}.${RESEARCH_PROJECT}.yaml"
     [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ] \
-      && echo "          + ${DIR}/service.${USERNAME}.yaml"
+      && echo "          + ${DIR}/service.${USERNAME_SAFE}.yaml"
     [ "$WANT_SECRET" = 1 ] && echo "  secret: ${ENV_FILE} -> Secret '${SECRET_NAME}' (you create this yourself)"
   fi
   echo "  (this only builds locally — you push it yourself afterward)"
@@ -358,17 +405,25 @@ echo ">> Built ${IMAGE}"
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
   # Includes the research project: one person working on two projects would
   # otherwise have the second run silently overwrite the first's job file.
-  JOB_OUT="job.${USERNAME}.${RESEARCH_PROJECT}.yaml"
+  JOB_OUT="job.${USERNAME_SAFE}.${RESEARCH_PROJECT}.yaml"
   sed_args=(
-    -e "s#<USERNAME>#${USERNAME}#g"
-    -e "s#<USER_ID>#${USER_ID}#g"
-    -e "s#<GROUP_ID>#${GROUP_ID}#g"
+    -e "s#<USERNAME>#$(esc_repl "${USERNAME}")#g"
+    # Resource names (generateName, the Service name) are RFC 1123
+    # subdomains: no underscores, no uppercase. Account names have both —
+    # `ada_lovelace` is a real shape here — and such a name produces yaml
+    # the API server rejects outright. The `owner` LABEL keeps the true
+    # account (label values do allow `_`), so attribution is unaffected:
+    # kubmonitor's name-based fallback already compares `_` in accounts
+    # against `-` in names.
+    -e "s#<USERNAME_SAFE>#$(esc_repl "${USERNAME_SAFE}")#g"
+    -e "s#<USER_ID>#$(esc_repl "${USER_ID}")#g"
+    -e "s#<GROUP_ID>#$(esc_repl "${GROUP_ID}")#g"
     # Fills the `project` usage-accounting label — the research project this
     # job is work on (kubmonitor docs/LABELS.md). NOT ${PROJECT}, which is the
     # ECIR registry namespace the image is pushed to; they are separate
     # questions with separate answers.
     -e "s#<RESEARCH_PROJECT>#$(esc_repl "${RESEARCH_PROJECT}")#g"
-    -e "s#eidf105ns#${NAMESPACE}#g"
+    -e "s#eidf105ns#$(esc_repl "${NAMESPACE}")#g"
     # Replace the whole image line with $IMAGE (already computed per-mode
     # above: :latest for personal, :$USERNAME for template) rather than
     # patching registry/tag piecemeal — the template's hardcoded tag is only
@@ -399,8 +454,12 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
   fi
 
   if [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ]; then
-    SVC_OUT="service.${USERNAME}.yaml"
-    sed -e "s#<USERNAME>#${USERNAME}#g" "${TARGET_SERVICE_TEMPLATE[$TARGET]}" > "$SVC_OUT"
+    SVC_OUT="service.${USERNAME_SAFE}.yaml"
+    # Same split as the Job: <USERNAME_SAFE> for the Service's own name,
+    # <USERNAME> for the selector, which must match the pod's owner label.
+    sed -e "s#<USERNAME_SAFE>#$(esc_repl "${USERNAME_SAFE}")#g" \
+        -e "s#<USERNAME>#$(esc_repl "${USERNAME}")#g" \
+        "${TARGET_SERVICE_TEMPLATE[$TARGET]}" > "$SVC_OUT"
     echo ">> Wrote ${DIR}/${SVC_OUT}"
   fi
 fi

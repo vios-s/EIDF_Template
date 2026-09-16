@@ -10,7 +10,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: cuda-<USERNAME>-
+  generateName: cuda-<USERNAME_SAFE>-
   labels:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
     # Ownership labels — keep these: they record whose Job this is and
