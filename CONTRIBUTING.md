@@ -282,9 +282,21 @@ uses them next:
 1. `Dockerfile.base` (if the setup is nontrivial/slow) + `Dockerfile` +
    `Dockerfile.template`, using the non-root user-creation block above.
 2. `job.template.yaml` (+ `job.interactive.yaml` if a keep-alive/debug mode
-   makes sense for this tool) with `<USERNAME>`/`<USER_ID>`/`<GROUP_ID>`
-   placeholders (and any extra placeholder your job needs, e.g. `<COMMAND>`),
-   `imagePullSecrets: [eidf105-ecir-read-robot]`, and the NFS volume mount.
+   makes sense for this tool) with these placeholders (plus any extra your
+   job needs, e.g. `<COMMAND>`), `imagePullSecrets:
+   [eidf105-ecir-read-robot]`, and the NFS volume mount:
+
+   | Placeholder | Put it in | Why |
+   |---|---|---|
+   | `<USERNAME_SAFE>` | `generateName`, any resource `name` | Resource names are RFC 1123 subdomains; accounts like `ada_lovelace` are not, and the API server rejects them |
+   | `<USERNAME>` | the `owner` label, NFS paths under `/data/users/` | Must stay the real account — label values allow `_`, and attribution depends on it |
+   | `<RESEARCH_PROJECT>` | the `project` label | The research project, not the group code (kubmonitor `docs/LABELS.md`) |
+   | `<USER_ID>` / `<GROUP_ID>` | `runAsUser` / `runAsGroup` | Files on the NFS end up owned by you |
+
+   Getting `<USERNAME_SAFE>` and `<USERNAME>` the wrong way round is the easy
+   mistake: one yields a Job the server refuses to create, the other an
+   `owner` label that no longer matches the account. Copy an existing
+   template rather than writing the labels block from memory.
    If the tool can use a secret (an API token, etc.), add a
    `# <SECRET_ENV_HOOK>` marker line where the wizard should insert it — see
    "Managing secrets" below, don't hand-write the secret block into the
