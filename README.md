@@ -21,7 +21,7 @@ follow the same pattern:
   `purpose` labels (filled in by the wizard), so it's always clear whose
   workload is whose — handy for `kubectl get pods -l owner=<you>` and for
   admins tidying up the shared namespace. Keep them if you hand-edit a Job.
-  `project` is your *research* project (`mri-recon`, `fairness`), not the
+  `project` is your *research* project (`mri_recon`, `fairness`), not the
   `eidf105` group code — the namespace already says which group you are in,
   so putting it in the label would make every workload look identical. List
   them with `kubectl get jobs -L project,owner`.

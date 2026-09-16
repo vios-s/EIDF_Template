@@ -13,7 +13,7 @@ metadata:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
     # Ownership labels — keep these: they record whose Job this is and
     # what it's for (e.g. kubectl get jobs -l owner=<you>).
-    # 'project' is the strand of work this job is for — e.g. mri-recon,
+    # 'project' is the strand of work this job is for — e.g. mri_recon,
     # fairness — NOT the eidf105 group code, which is already implied by
     # the namespace. Reuse one name across runs so usage reports group
     # them (see kubmonitor docs/LABELS.md).

@@ -132,7 +132,7 @@ these on your first build but a colleague on a different day very well might.
 - **A different research project**: re-run the wizard and answer the
   "Research project" question differently, or `sed`-replace the `project`
   label in your copied file. It is the strand of work the job is for
-  (`mri-recon`), not the group code — see kubmonitor's `docs/LABELS.md`.
+  (`mri_recon`), not the group code — see kubmonitor's `docs/LABELS.md`.
   Each answer gets its own `job.<you>.<project>.yaml`, so running two
   projects side by side does not overwrite one file.
 - **A different namespace or ECIR project**: the `build.sh` wizard asks for

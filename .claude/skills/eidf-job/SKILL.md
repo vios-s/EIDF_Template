@@ -25,7 +25,7 @@ YAML almost always gets something wrong that the templates get right:
   how anyone — including cluster tooling like kubmonitor — can tell whose
   workload is whose (`kubectl get pods -l owner=<user>`). A job without
   them is anonymous and gets chased up by the admins. Never drop them.
-  `project` is the user's **research project** (`mri-recon`, `fairness`),
+  `project` is the user's **research project** (`mri_recon`, `fairness`),
   never the `eidf105` group code: the namespace already carries the group,
   so a group-code label would be identical on every workload and tell
   usage reports nothing.
@@ -91,7 +91,7 @@ In order of preference:
 
 **The research project is the one fact you must ask for.** It fills the
 `project` label and is a short name for the strand of work the job belongs
-to — `mri-recon`, `fairness`, `diffusion-priors`. Do not derive it from the
+to — `mri_recon`, `fairness`, `diffusion_priors`. Do not derive it from the
 namespace, the group code, the image name, or the directory you happen to
 be in, and do not invent one: a wrong value is worse than a question,
 because usage reports silently group the job under the wrong heading.
@@ -100,6 +100,21 @@ Two shortcuts are legitimate. If the user already has a
 `job.<them>.<something>.yaml` nearby, or told you earlier in the
 conversation what they are working on, propose that value and let them
 correct it. Otherwise ask outright — one short question.
+
+**Reuse the group's existing spelling.** Reports group by this value
+verbatim, so `mri_recon` and `mri-recon` are two projects. The group
+convention is underscores. If a kubmonitor config is around, its
+`research_projects:` list is the set of names already in use — prefer one
+of those over inventing a variant:
+
+```bash
+grep -A10 research_projects ~/.config/kubmonitor/project.yaml 2>/dev/null
+```
+
+`kubmonitor validate` (Step 7) warns when a value looks like a misspelling
+of a registered one. Treat that warning as a real finding and fix the
+label — it means this job's hours would land under a second, near-duplicate
+project in every report.
 
 **Scan before you ask.** Most sizing facts are discoverable — prefer a
 quick scan over a questionnaire:
@@ -171,7 +186,7 @@ Copy the template to `job.<username>.<project>.yaml` and replace **all** of:
 |---|---|
 | `<USERNAME>` | login account from `id -un` |
 | `<USER_ID>` / `<GROUP_ID>` | from `id -u` / `id -g` |
-| `<RESEARCH_PROJECT>` | the research project from Step 2 (e.g. `mri-recon`) — ask, never derive from the namespace |
+| `<RESEARCH_PROJECT>` | the research project from Step 2 (e.g. `mri_recon`) — ask, never derive from the namespace |
 | `<COMMAND>` | the user's command (CUDA batch template; it sits in a YAML block scalar, so quotes inside it are safe) |
 | `<MODEL>` | HF model id (vllm template) |
 | `<SECRET_ENV_HOOK>` | see Step 6 |

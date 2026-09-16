@@ -6,8 +6,9 @@
 #
 # Usage:
 #   ./build.sh                       # full interactive wizard (asks everything,
-#                                     # builds locally, writes job.<you>.yaml,
-#                                     # then prints the push + deploy commands)
+#                                     # builds locally, writes
+#                                     # job.<you>.<project>.yaml, then prints
+#                                     # the push + deploy commands)
 #   ./build.sh <target>               # non-interactive: just build the personal image
 #   ./build.sh <target> --template    # non-interactive: build Dockerfile.template
 #   ./build.sh <target> --base        # non-interactive: (shared-base targets) rebuild Dockerfile.base
@@ -198,8 +199,9 @@ if [ "$INTERACTIVE" = 1 ]; then
     echo
     echo "Which research project is this job for? This becomes the 'project'"
     echo "label used for usage reporting — a short name for the strand of work"
-    echo "(e.g. mri-recon, fairness), NOT the eidf105 group code. Reuse the"
-    echo "same name across runs so they group together."
+    echo "(e.g. mri_recon, fairness), NOT the eidf105 group code. Reuse the"
+    echo "same name across runs so they group together; group convention is"
+    echo "underscores, since 'mri_recon' and 'mri-recon' report separately."
     RESEARCH_PROJECT=$(ask "Research project" "${RESEARCH_PROJECT:-}")
     # A label value k8s would reject fails at `kubectl create`, long after this
     # script has exited successfully — so catch it here, while we can re-ask.
