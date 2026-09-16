@@ -54,7 +54,7 @@ cd ..
 With no arguments it's a full interactive wizard: pick `vllm`, pick
 serving-vs-interactive, answer a handful of questions (each with a sensible
 default — press Enter to accept one), confirm, and it builds the image
-**locally** and writes a ready-to-use `job.<you>.yaml` (+ `service.<you>.yaml`
+**locally** and writes a ready-to-use `job.<you>.<project>.yaml` (+ `service.<you>.yaml`
 in serving mode) — and prints the exact `docker push` + `kubectl` commands
 for the next steps, it never pushes or deploys anything for you. Safe to
 re-run any time.
@@ -70,7 +70,9 @@ USERNAME=yyx USER_ID=47259 GROUP_ID=4542 ./build.sh vllm
 ```
 
 `PROJECT` defaults to `eidf105`; override it (`PROJECT=... ./build.sh vllm`)
-if you ever need to push to a different ECIR project. Each group member
+if you ever need to push to a different ECIR project. It is *not* the
+`project` label on the Job — that one is your research project, asked for
+separately by the wizard (`RESEARCH_PROJECT`). Each group member
 builds their own tag if uid/gid differ, e.g.
 `registry.eidf.ac.uk/eidf105/vllm-eidf:yyx`. Set `IMAGE=...` to override the
 tag (non-interactive mode only).
@@ -123,12 +125,12 @@ point your Job's `image:` at it.
 
 ## 4. Deploy the serving Job
 
-If you used the wizard, it already wrote `job.<you>.yaml` (+
+If you used the wizard, it already wrote `job.<you>.<project>.yaml` (+
 `service.<you>.yaml` in serving mode) with everything filled in — just push
 the image (step 3) then:
 
 ```bash
-kubectl -n eidf105ns create -f job.<you>.yaml
+kubectl -n eidf105ns create -f job.<you>.<project>.yaml
 kubectl -n eidf105ns apply  -f service.<you>.yaml    # serving mode only
 kubectl -n eidf105ns get pods -l owner=<you> -w      # wait for Running/Ready
 kubectl -n eidf105ns logs -f <pod-name>              # watch the model load
@@ -173,7 +175,7 @@ and Docker layers keep old values around even after you "remove" them.
 The wizard asks, for serving mode, whether you have a `.env` file (e.g. with
 `HF_TOKEN` for gated models) — but it only ever asks for its **path** and a
 **Kubernetes Secret name** to create, never its contents. If you say yes, it
-wires up a real `envFrom: secretRef` block in your generated `job.<you>.yaml`
+wires up a real `envFrom: secretRef` block in your generated `job.<you>.<project>.yaml`
 and reminds you, at the end, to actually create that Secret:
 
 ```bash

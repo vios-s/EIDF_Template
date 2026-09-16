@@ -16,8 +16,12 @@ metadata:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
     # Ownership labels — keep these: they record whose Job this is and
     # what it's for (e.g. kubectl get jobs -l owner=<you>).
+    # 'project' is the strand of work this job is for — e.g. mri-recon,
+    # fairness — NOT the eidf105 group code, which is already implied by
+    # the namespace. Reuse one name across runs so usage reports group
+    # them (see kubmonitor docs/LABELS.md).
     owner: <USERNAME>
-    project: <PROJECT>
+    project: <RESEARCH_PROJECT>
     purpose: interactive
 spec:
   parallelism: 1
@@ -28,7 +32,7 @@ spec:
       labels:
         app: vllm-dev
         owner: <USERNAME>            # kubectl get pods -l owner=<you>
-        project: <PROJECT>
+        project: <RESEARCH_PROJECT>
         purpose: interactive
     spec:
       restartPolicy: Never

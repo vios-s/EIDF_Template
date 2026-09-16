@@ -18,8 +18,12 @@
 # is always something you explicitly run yourself.
 #
 # Env vars (all optional, used as defaults you can still override
-# interactively): USERNAME, USER_ID, GROUP_ID, REGISTRY, PROJECT, IMAGE
-# (non-interactive mode only).
+# interactively): USERNAME, USER_ID, GROUP_ID, REGISTRY, PROJECT,
+# RESEARCH_PROJECT, IMAGE (non-interactive mode only).
+#
+# PROJECT and RESEARCH_PROJECT are not the same thing: PROJECT is the ECIR
+# registry namespace an image is pushed to, RESEARCH_PROJECT is the strand of
+# work a job belongs to and fills the `project` usage-accounting label.
 #
 # Adding a new target: create a new top-level folder with a Dockerfile and an
 # `image.conf` (copy an existing one) — nothing in this script needs editing.
@@ -185,6 +189,30 @@ if [ "$INTERACTIVE" = 1 ]; then
     REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
     PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
 
+    # Deliberately a separate question from the ECIR project above. These are
+    # different things that used to share one answer: PROJECT is where the
+    # image is pushed (a registry namespace), RESEARCH_PROJECT is what the
+    # job is work *on*, and it goes in the `project` usage-accounting label.
+    # Answering both with "eidf105" put the same value on every workload in
+    # the namespace, which is what made the label useless.
+    echo
+    echo "Which research project is this job for? This becomes the 'project'"
+    echo "label used for usage reporting — a short name for the strand of work"
+    echo "(e.g. mri-recon, fairness), NOT the eidf105 group code. Reuse the"
+    echo "same name across runs so they group together."
+    RESEARCH_PROJECT=$(ask "Research project" "${RESEARCH_PROJECT:-}")
+    # A label value k8s would reject fails at `kubectl create`, long after this
+    # script has exited successfully — so catch it here, while we can re-ask.
+    until [[ "$RESEARCH_PROJECT" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$ ]]; do
+      if [ -z "$RESEARCH_PROJECT" ]; then
+        echo "  Required — the label has no useful default."
+      else
+        echo "  '${RESEARCH_PROJECT}' is not a valid label value: use letters,"
+        echo "  digits, '-', '_' or '.', starting and ending alphanumeric (max 63)."
+      fi
+      RESEARCH_PROJECT=$(ask "Research project" "")
+    done
+
     count="${JOBMODE_COUNT[$TARGET]}"
     JOB_MODE_IDX=1
     if [ "$count" -gt 1 ]; then
@@ -234,7 +262,8 @@ if [ "$INTERACTIVE" = 1 ]; then
   echo "  image:  ${IMAGE}"
   if [ "$MODE" != base ]; then
     echo "  user:   ${USERNAME} (uid=${USER_ID}, gid=${GROUP_ID})"
-    echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME}.yaml"
+    echo "  study:  ${RESEARCH_PROJECT} (fills the 'project' label)"
+    echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME}.${RESEARCH_PROJECT}.yaml"
     [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ] \
       && echo "          + ${DIR}/service.${USERNAME}.yaml"
     [ "$WANT_SECRET" = 1 ] && echo "  secret: ${ENV_FILE} -> Secret '${SECRET_NAME}' (you create this yourself)"
@@ -325,14 +354,18 @@ echo ">> Built ${IMAGE}"
 
 # --- interactive extra: write job (+ service) yaml -----------------------------
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
-  JOB_OUT="job.${USERNAME}.yaml"
+  # Includes the research project: one person working on two projects would
+  # otherwise have the second run silently overwrite the first's job file.
+  JOB_OUT="job.${USERNAME}.${RESEARCH_PROJECT}.yaml"
   sed_args=(
     -e "s#<USERNAME>#${USERNAME}#g"
     -e "s#<USER_ID>#${USER_ID}#g"
     -e "s#<GROUP_ID>#${GROUP_ID}#g"
-    # Fills the eidf.ac.uk/project usage-accounting label (same id as the
-    # registry project for this group).
-    -e "s#<PROJECT>#${PROJECT}#g"
+    # Fills the `project` usage-accounting label — the research project this
+    # job is work on (kubmonitor docs/LABELS.md). NOT ${PROJECT}, which is the
+    # ECIR registry namespace the image is pushed to; they are separate
+    # questions with separate answers.
+    -e "s#<RESEARCH_PROJECT>#$(esc_repl "${RESEARCH_PROJECT}")#g"
     -e "s#eidf105ns#${NAMESPACE}#g"
     # Replace the whole image line with $IMAGE (already computed per-mode
     # above: :latest for personal, :$USERNAME for template) rather than

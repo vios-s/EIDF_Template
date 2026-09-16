@@ -2,12 +2,12 @@
 name: eidf-job
 description: >
   Create or edit GPU workloads (Kubernetes Job YAML) for the EIDF GPU
-  Service (group project eidf105, namespace eidf105ns). Use this skill
+  Service (group eidf105, namespace eidf105ns). Use this skill
   WHENEVER the user wants to run, train, fine-tune, serve, or debug
   anything on "the cluster", "EIDF", "the GPUs", the H100s/A100s, or asks
   for a "job yaml", "job file", "pod", "interactive pod", "vllm server",
   or wants to change the GPUs/CPUs/memory/image of an existing
-  job.<user>.yaml — even if they never say "EIDF" or "Kubernetes".
+  job.<user>.<project>.yaml — even if they never say "EIDF" or "Kubernetes".
   Never write EIDF job YAML from scratch or from memory: this skill fills
   the group's standard templates so every job carries the required
   ownership labels and cluster conventions.
@@ -25,6 +25,10 @@ YAML almost always gets something wrong that the templates get right:
   how anyone — including cluster tooling like kubmonitor — can tell whose
   workload is whose (`kubectl get pods -l owner=<user>`). A job without
   them is anonymous and gets chased up by the admins. Never drop them.
+  `project` is the user's **research project** (`mri-recon`, `fairness`),
+  never the `eidf105` group code: the namespace already carries the group,
+  so a group-code label would be identical on every workload and tell
+  usage reports nothing.
 - **Non-root as the actual user**: `runAsUser`/`runAsGroup` matching the
   user's NFS uid/gid, so files written to `/data` are owned correctly.
 - **Working pull secret** (`eidf105-ecir-read-robot`), NFS mount, `/dev/shm`
@@ -42,19 +46,21 @@ to the user in their own language is of course fine.)
 ## Which namespace?
 
 Everything below says `eidf105ns` — the right default for this group.
-The skill generalises though: EIDF naming is regular, project `eidfXXX`
-→ namespace `eidfXXXns` → kueue queue `eidfXXXns-user-queue` →
-`project` label `eidfXXX`. If the user belongs to a different EIDF
-project, swap all of those *consistently* (including the hardcoded
-`eidf105ns` strings inside the templates — build.sh does this
-substitution when run interactively).
+The skill generalises though: EIDF naming is regular, group code `eidfXXX`
+→ namespace `eidfXXXns` → kueue queue `eidfXXXns-user-queue`. If the user
+belongs to a different EIDF group, swap all of those *consistently*
+(including the hardcoded `eidf105ns` strings inside the templates —
+build.sh does this substitution when run interactively).
+
+The `project` label is **not** part of that chain. It is the user's
+research project and cannot be derived from anything — see Step 2.
 
 You cannot list namespaces on this cluster, and the shared kubeconfig
 (`/kubernetes/config`) carries no namespace either — but EIDF login VMs
-are named after their project, so the code is auto-detectable locally:
+are named after their group, so the code is auto-detectable locally:
 
 ```bash
-hostname          # eidf105-vios.vms... -> project eidf105
+hostname          # eidf105-vios.vms... -> group eidf105
 ls -d /home/eidf*  # /home/eidf105 -> same answer
 ```
 
@@ -77,10 +83,23 @@ In order of preference:
 | Fact | How to get it |
 |---|---|
 | username, uid, gid | `id -un`, `id -u`, `id -g` on this login VM — do NOT guess |
+| research project | **ask** — see below. Not derivable from anything |
 | what kind of job | infer from the request (see Step 3), confirm if ambiguous |
 | GPU model + count | user's request, or recommend one (see below) |
 | the command / model | user's request |
 | secrets needed? | if the workload needs an HF token, W&B key, etc. |
+
+**The research project is the one fact you must ask for.** It fills the
+`project` label and is a short name for the strand of work the job belongs
+to — `mri-recon`, `fairness`, `diffusion-priors`. Do not derive it from the
+namespace, the group code, the image name, or the directory you happen to
+be in, and do not invent one: a wrong value is worse than a question,
+because usage reports silently group the job under the wrong heading.
+
+Two shortcuts are legitimate. If the user already has a
+`job.<them>.<something>.yaml` nearby, or told you earlier in the
+conversation what they are working on, propose that value and let them
+correct it. Otherwise ask outright — one short question.
 
 **Scan before you ask.** Most sizing facts are discoverable — prefer a
 quick scan over a questionnaire:
@@ -146,13 +165,13 @@ when someone asks for an interactive GPU pod:
 
 ## Step 4 — fill every placeholder, change nothing else
 
-Copy the template to `job.<username>.yaml` and replace **all** of:
+Copy the template to `job.<username>.<project>.yaml` and replace **all** of:
 
 | Placeholder | Value |
 |---|---|
 | `<USERNAME>` | login account from `id -un` |
 | `<USER_ID>` / `<GROUP_ID>` | from `id -u` / `id -g` |
-| `<PROJECT>` | the project code from "Which namespace?" (here `eidf105`) |
+| `<RESEARCH_PROJECT>` | the research project from Step 2 (e.g. `mri-recon`) — ask, never derive from the namespace |
 | `<COMMAND>` | the user's command (CUDA batch template; it sits in a YAML block scalar, so quotes inside it are safe) |
 | `<MODEL>` | HF model id (vllm template) |
 | `<SECRET_ENV_HOOK>` | see Step 6 |
@@ -235,15 +254,15 @@ If no secrets are needed, just delete the `<SECRET_ENV_HOOK>` line.
 
 ## Step 7 — check and hand over
 
-1. If `kubmonitor` is installed, run `kubmonitor validate job.<username>.yaml`
+1. If `kubmonitor` is installed, run `kubmonitor validate job.<username>.<project>.yaml`
    — it confirms the ownership labels survived. Fix anything it reports.
-2. `kubectl -n eidf105ns create --dry-run=server -f job.<username>.yaml`
+2. `kubectl -n eidf105ns create --dry-run=server -f job.<username>.<project>.yaml`
    runs the file through the real admission chain (kueue included)
    without creating anything — a free catch for schema mistakes.
 3. Give the user the deploy commands:
 
 ```bash
-kubectl -n eidf105ns create -f job.<username>.yaml
+kubectl -n eidf105ns create -f job.<username>.<project>.yaml
 kubectl -n eidf105ns get pods -l owner=<username> -w
 kubectl -n eidf105ns logs -f <pod-name>        # batch/serving
 kubectl -n eidf105ns exec -it <pod-name> -- /bin/bash   # interactive
@@ -269,7 +288,7 @@ explicit about the VRAM step-down (e.g. a model chosen for H200's 141GB
 may need a smaller batch, sharding, or quantization on an 80GB card) —
 let the user decide rather than silently downgrading.
 
-## Editing an existing job.<user>.yaml
+## Editing an existing job.<user>.<project>.yaml
 
 Apply the requested change (GPUs, image, command, …) and leave the rest
 intact — in particular the labels block, securityContext,

@@ -12,7 +12,7 @@ One entrypoint, [`build.sh`](build.sh), lives at the **repo root** and
 handles every image — there's no per-folder `build.sh`/`quickstart.sh` to
 avoid duplicating the same script three times. Run with no arguments it's a
 full interactive wizard (pick a target, pick a mode, answer a few questions,
-confirm) that builds **locally** and writes `job.<you>.yaml`; run with a
+confirm) that builds **locally** and writes `job.<you>.<project>.yaml`; run with a
 target argument it's non-interactive for scripting. Either way it never runs
 `docker push` or `kubectl` for you — it only ever prints those commands. It
 works off a small `image.conf` descriptor in each folder, so adding a new
@@ -33,7 +33,7 @@ build.sh                  # the one entrypoint, at the repo root
                             # base/template flags, job modes it can generate)
   job.template.yaml        # copy, fill in <PLACEHOLDER>s
   job.interactive.yaml     # (some folders) keep-alive debug pod template
-  job.<you>.yaml           # your generated instance — gitignored, not shared
+  job.<you>.<project>.yaml           # your generated instance — gitignored, not shared
   README.md
 ```
 
@@ -129,6 +129,12 @@ these on your first build but a colleague on a different day very well might.
 - **Resources / GPU type**: edit `resources.requests`/`limits` and
   `nodeSelector.nvidia.com/gpu.product` directly. See the `# Pick a GPU type`
   comment in each template for the current options.
+- **A different research project**: re-run the wizard and answer the
+  "Research project" question differently, or `sed`-replace the `project`
+  label in your copied file. It is the strand of work the job is for
+  (`mri-recon`), not the group code — see kubmonitor's `docs/LABELS.md`.
+  Each answer gets its own `job.<you>.<project>.yaml`, so running two
+  projects side by side does not overwrite one file.
 - **A different namespace or ECIR project**: the `build.sh` wizard asks for
   both interactively; by hand, it's `sed`-replacing `eidf105ns` (Kueue queue
   name) and `registry.eidf.ac.uk/eidf105/` in your copied file. Also check whether
@@ -233,7 +239,7 @@ for targets that should offer this. When the wizard runs and you opt in, it:
 1. Asks for the **path to your `.env` file** and a **Kubernetes Secret name**
    to create it as — metadata only, it never opens or reads the file.
 2. Substitutes a real `envFrom: [{ secretRef: { name: ... } }]` block into
-   your generated `job.<you>.yaml`, replacing the marker line.
+   your generated `job.<you>.<project>.yaml`, replacing the marker line.
 3. Prints a reminder, at the end, to actually create that Secret yourself:
    `kubectl create secret generic <name> --from-env-file=<path>`.
 

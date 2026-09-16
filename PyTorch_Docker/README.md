@@ -51,7 +51,7 @@ cd ..
 With no arguments it's a full interactive wizard: pick `pytorch`, pick
 personal/template, answer a handful of questions (each with a sensible
 default — press Enter to accept one), confirm, and it builds the image
-**locally** and writes a ready-to-use `job.<you>.yaml` (and prints the exact
+**locally** and writes a ready-to-use `job.<you>.<project>.yaml` (and prints the exact
 `docker push` + `kubectl` commands for the next steps — see below, it never
 pushes or deploys anything for you). Safe to re-run any time.
 
@@ -111,11 +111,11 @@ it's pushed, no action needed on their end.
 
 ## 4. Deploy and exec in
 
-If you used the wizard, it already wrote `job.<you>.yaml` with everything
+If you used the wizard, it already wrote `job.<you>.<project>.yaml` with everything
 filled in — just push the image (step 3) then:
 
 ```bash
-kubectl -n eidf105ns create -f job.<you>.yaml
+kubectl -n eidf105ns create -f job.<you>.<project>.yaml
 kubectl -n eidf105ns get pods -l owner=<you> -w        # wait for Running
 kubectl -n eidf105ns exec -it <pod-name> -- /bin/bash
 ```
@@ -152,7 +152,7 @@ and Docker layers keep old values around even after you "remove" them.
 The wizard asks, for personal/template builds, whether you have a `.env`
 file — but it only ever asks for its **path** and a **Kubernetes Secret
 name** to create, never its contents. If you say yes, it wires up a real
-`envFrom: secretRef` block in your generated `job.<you>.yaml` and reminds
+`envFrom: secretRef` block in your generated `job.<you>.<project>.yaml` and reminds
 you, at the end, to actually create that Secret:
 
 ```bash
