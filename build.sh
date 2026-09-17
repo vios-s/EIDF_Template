@@ -509,6 +509,36 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
       echo ">> WARNING: ${JOB_OUT} does not satisfy the usage-accounting label contract (see above)"
   fi
 
+  # ... and then through the real admission chain. `kubmonitor validate` only
+  # checks the label contract: a misspelled field or a string where an int
+  # belongs sails past it and fails at deploy time instead. The eidf-job
+  # skill has always told the assistant to run this (Step 7); the wizard did
+  # not, so the two paths handed back files with different levels of
+  # assurance. Note --dry-run=client is NOT a substitute: it catches only
+  # YAML syntax, and needs the cluster anyway to fetch the schema.
+  #
+  # Advisory, like the check above — the file is already written, and this
+  # must not fail for anyone off-cluster (a laptop, no kubectl). So an
+  # unreachable cluster is reported differently from a rejected manifest.
+  dry_run_check() {  # dry_run_check FILE
+    local file="$1" out
+    out=$(timeout 60 kubectl -n "${NAMESPACE}" create --dry-run=server \
+            -f "$file" 2>&1) && { echo ">> ${file}: accepted by the cluster (dry run)"; return 0; }
+    case "$out" in
+      *"Unable to connect"*|*"connection refused"*|*"no such host"*|\
+      *"credentials"*|*"Unauthorized"*|*"timed out"*)
+        echo ">> (skipped the cluster dry-run: ${NAMESPACE} not reachable from here)"
+        ;;
+      *)
+        echo ">> WARNING: the cluster REJECTED ${file} — fix this before deploying:"
+        echo "${out}" | sed 's/^/     /' | head -8
+        ;;
+    esac
+  }
+  if command -v kubectl >/dev/null 2>&1; then
+    dry_run_check "$JOB_OUT"
+  fi
+
   if [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ]; then
     SVC_OUT="service.${USERNAME_SAFE}.yaml"
     # Same split as the Job: <USERNAME_SAFE> for the Service's own name,
@@ -517,6 +547,7 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
         -e "s#<USERNAME>#$(esc_repl "${USERNAME}")#g" \
         "${TARGET_SERVICE_TEMPLATE[$TARGET]}" > "$SVC_OUT"
     echo ">> Wrote ${DIR}/${SVC_OUT}"
+    command -v kubectl >/dev/null 2>&1 && dry_run_check "$SVC_OUT"
   fi
 fi
 
