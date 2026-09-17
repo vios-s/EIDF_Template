@@ -17,8 +17,8 @@ metadata:
     # fairness — NOT the eidf105 group code, which is already implied by
     # the namespace. Reuse one name across runs so usage reports group
     # them (see kubmonitor docs/LABELS.md).
-    owner: <USERNAME>
-    project: <RESEARCH_PROJECT>
+    owner: "<USERNAME>"
+    project: "<RESEARCH_PROJECT>"
     purpose: interactive
 spec:
   parallelism: 1
@@ -28,8 +28,8 @@ spec:
     metadata:
       labels:
         app: cuda-dev
-        owner: <USERNAME>            # kubectl get pods -l owner=<you>
-        project: <RESEARCH_PROJECT>
+        owner: "<USERNAME>"            # kubectl get pods -l owner=<you>
+        project: "<RESEARCH_PROJECT>"
         purpose: interactive
     spec:
       restartPolicy: Never
@@ -38,7 +38,7 @@ spec:
         runAsGroup: <GROUP_ID>
         runAsNonRoot: true
       imagePullSecrets:
-        - name: eidf105-ecir-read-robot
+        - name: <PULL_SECRET>
       containers:
         - name: cuda
           image: registry.eidf.ac.uk/eidf105/cuda-eidf:<USERNAME>

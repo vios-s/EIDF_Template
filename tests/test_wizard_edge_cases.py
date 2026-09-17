@@ -39,6 +39,12 @@ LABEL_VALUE = re.compile(r"^([a-zA-Z0-9]([-_.a-zA-Z0-9]{0,61}[a-zA-Z0-9])?)?$")
 # generateName prefix before appending its suffix.
 DNS1123_SUBDOMAIN = re.compile(
     r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+# Docker image reference: [host[:port]/]path[:tag]. Deliberately loose — the
+# point is to reject characters no registry accepts, not to reimplement the
+# distribution spec.
+IMAGE_REF = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*(/[a-z0-9]+([._-][a-z0-9]+)*)*"
+    r"(:[a-zA-Z0-9][a-zA-Z0-9._-]*)?$")
 
 
 def build(workdir, answers, target="1", mode="1"):
@@ -70,6 +76,17 @@ def check_doc(doc, problems, where):
                            .get("labels") or {}))
     for scope, labels in label_sets:
         for k, v in labels.items():
+            # k8s labels are map[string]string. An unquoted `true`/`123`
+            # answer is a legal label value that YAML types as bool/int, and
+            # the decode fails before validation ever runs. `null` is worse:
+            # it decodes to an empty label, so the server accepts a workload
+            # that no report can attribute.
+            if not isinstance(v, str):
+                problems.append(
+                    f"{where}: {scope} label {k}={v!r} parsed as "
+                    f"{type(v).__name__}, not str — the value needs quoting "
+                    f"in the template")
+                continue
             if not LABEL_VALUE.match(str(v)):
                 problems.append(
                     f"{where}: {scope} label {k}={v!r} is not a valid "
@@ -79,6 +96,16 @@ def check_doc(doc, problems, where):
                     f"{where}: {scope} label {k} value exceeds 63 chars")
         if "<" in str(labels):
             problems.append(f"{where}: {scope} has an unfilled placeholder")
+
+    # The image reference is the one field the server does NOT validate: a
+    # malformed one is accepted at create and fails later as
+    # ImagePullBackOff, so nothing else in this file would catch it.
+    for container in ((tpl.get("spec") or {}).get("containers") or []):
+        image = str(container.get("image", ""))
+        if not IMAGE_REF.match(image):
+            problems.append(
+                f"{where}: image {image!r} is not a usable reference — the "
+                f"cluster accepts it and then cannot pull it")
 
 
 def server_dry_run(path, namespace="eidf105ns"):
@@ -201,7 +228,34 @@ CASES = [
      {"owner": "AdaLovelace"}),
     ("account with a dot", A(user="ada.lovelace"), "valid",
      {"owner": "ada.lovelace"}),
+    # A dot is legal in a subdomain only *between* labels, so folding has to
+    # do more than drop illegal characters: `a..b` leaves an empty label and
+    # `a.-b` one starting with '-', and the API server rejects both.
+    ("account with doubled dots", A(user="ada..lovelace"), "valid",
+     {"owner": "ada..lovelace"}),
+    ("account with dot next to dash", A(user="ada.-lovelace"), "valid",
+     {"owner": "ada.-lovelace"}),
     ("very long account name", A(user="a" * 60), "valid", None),
+    # Label values are map[string]string. These are legal label values, but
+    # unquoted YAML types them as bool/int/null and the decode fails before
+    # the manifest is even validated — except `null`, which decodes to an
+    # EMPTY label: accepted by the server, and silently unattributable.
+    ("research project 'true'", A(research="true"), "valid",
+     {"project": "true"}),
+    ("research project '123'", A(research="123"), "valid",
+     {"project": "123"}),
+    ("research project 'null'", A(research="null"), "valid",
+     {"project": "null"}),
+    # The namespace is interpolated into the queue-name label as
+    # "<ns>-user-queue", so the label hits the 63-char cap 11 characters
+    # before the namespace does. 63 is a legal namespace whose label the
+    # server then rejects; the guard must re-ask. Asserting on the corrected
+    # value is what proves the first answer was refused — the manifests here
+    # are dry-run against eidf105ns, whose admission policy only accepts
+    # that namespace's own queues, so no invented namespace can be used.
+    ("namespace too long for the queue label",
+     A(ns=["n" * 63, "eidf105ns"]), "valid",
+     {"kueue.x-k8s.io/queue-name": "eidf105ns-user-queue"}),
     ("very long research project", A(research="r" * 63), "valid",
      {"project": "r" * 63}),
     ("research project with dots", A(research="mri.recon.v2"), "valid",
@@ -214,10 +268,15 @@ CASES = [
      "valid", {"kueue.x-k8s.io/queue-name": "eidf105ns-user-queue"}),
     ("namespace '&' then corrected", A(ns=["ns&amp", "eidf105ns"]),
      "valid", {"kueue.x-k8s.io/queue-name": "eidf105ns-user-queue"}),
-    # These two only ever reach the image name, which is replaced wholesale,
-    # so metacharacters in them are harmless.
-    ("registry with '&'", A(reg="reg&istry.example.com"), "valid", None),
-    ("ECIR project with '#'", A(proj="proj#1"), "valid", None),
+    # These two only reach the image reference, so sed metacharacters in them
+    # cannot corrupt the rest of the file — but an image reference is not
+    # free-form either, and a bad one survives BOTH yaml generation and the
+    # server dry-run, failing much later as ImagePullBackOff. So they are
+    # guarded too, and the corrected answer is what must reach the manifest.
+    ("registry with '&' then corrected",
+     A(reg=["reg&istry.example.com", "registry.eidf.ac.uk"]), "valid", None),
+    ("ECIR project with '#' then corrected",
+     A(proj=["proj#1", "eidf105"]), "valid", None),
     ("uid non-numeric then corrected", A(uid=["notanumber", "5001"]),
      "valid", None),
     ("research project with a space then corrected",

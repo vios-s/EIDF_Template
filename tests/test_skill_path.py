@@ -41,6 +41,7 @@ FILL = {
     "<USER_ID>": "5001",
     "<GROUP_ID>": "5001",
     "<RESEARCH_PROJECT>": "mri_recon",
+    "<PULL_SECRET>": "eidf105-ecir-read-robot",
     "<COMMAND>": "python train.py",
     "<MODEL>": "Qwen/Qwen2.5-7B-Instruct",
 }

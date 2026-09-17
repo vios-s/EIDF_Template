@@ -93,11 +93,16 @@ name_safe() {  # name_safe ACCOUNT -> RFC 1123 subdomain-safe form
   # API server reject the manifest. Fold to the nearest legal name; the
   # `owner` label still carries the untouched account.
   local s="${1,,}"
-  s="${s//[^a-z0-9.-]/-}"      # anything illegal (incl. '_') becomes '-'
+  # '.' is legal in a subdomain but only *between* labels, so `a..b` and
+  # `a.-b` are both rejected by the API server. Nothing here needs dots, so
+  # fold them to '-' as well and the result is always a DNS-1123 *label* —
+  # stricter than required, and valid by construction.
+  s="${s//[^a-z0-9]/-}"        # anything illegal (incl. '_' and '.') -> '-'
+  while [[ "$s" == *--* ]]; do s="${s//--/-}"; done   # collapse runs
   s="${s:0:30}"                # leave room for the template's prefix and the
                                # server's random suffix inside the 63-char cap
-  s="${s#"${s%%[a-z0-9]*}"}"   # trim leading non-alphanumerics
-  s="${s%"${s##*[a-z0-9]}"}"   # trim trailing non-alphanumerics
+  s="${s#-}"                   # trim leading '-'
+  s="${s%-}"                   # trim trailing '-' (incl. one left by the cut)
   printf '%s' "$s"
 }
 
@@ -207,6 +212,10 @@ if [ "$INTERACTIVE" = 1 ]; then
   else
     GROUP=eidf105
   fi
+  # Naming convention for the shared ECIR read robot. For eidf105 this is
+  # exactly the value the templates used to hardcode, so nothing changes
+  # for the group this repo was written for.
+  PULL_SECRET="${GROUP}-ecir-read-robot"
 
   echo
   declare -a MODE_OPTIONS=("personal — your own image")
@@ -240,7 +249,17 @@ if [ "$INTERACTIVE" = 1 ]; then
     echo " Docker Hub username as the project to push there instead — see"
     echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
     REGISTRY=$(ask "Registry host" "${REGISTRY:-registry.eidf.ac.uk}")
+    # These two only ever reach the image reference, so a bad character here
+    # survives yaml generation AND the server dry-run — a manifest the
+    # cluster happily accepts and then cannot pull. Catch it while we can
+    # still re-ask, rather than at ImagePullBackOff.
+    ask_valid REGISTRY "Registry host" \
+      '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]+)?$' \
+      "A registry host is a hostname, optionally with :port."
     PROJECT=$(ask  "ECIR registry project" "${PROJECT:-$GROUP}")
+    ask_valid PROJECT "ECIR registry project" \
+      '^[a-z0-9]+([._-][a-z0-9]+)*$' \
+      "Registry paths are lowercase alphanumeric with '.', '_' or '-'."
     USERNAME="${USERNAME:-$(id -un)}"; USER_ID="${USER_ID:-$(id -u)}"; GROUP_ID="${GROUP_ID:-$(id -g)}"
   else
     USERNAME=$(ask "Your username"        "${USERNAME:-$(id -un)}")
@@ -266,9 +285,14 @@ if [ "$INTERACTIVE" = 1 ]; then
     # answer that is not a legal DNS-1123 label produces a manifest the API
     # server rejects on the label, with a message that never mentions the
     # namespace.
+    # Capped at 52, not 63: the namespace goes into the queue-name label as
+    # "${NAMESPACE}-user-queue", and a label VALUE is limited to 63. A
+    # 63-character namespace is a legal namespace whose label the server
+    # then rejects, complaining about a value the user never typed.
     ask_valid NAMESPACE "Kubernetes namespace" \
-      '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$' \
-      "Namespaces are lowercase alphanumeric with '-' (max 63)."
+      '^[a-z0-9]([-a-z0-9]{0,50}[a-z0-9])?$' \
+      "Namespaces are lowercase alphanumeric with '-' (max 52 here, so
+   '<namespace>-user-queue' stays inside the 63-char label limit)."
     if [ "$MODE" = existing ]; then
       # Nothing is built or pushed, so registry/project never come up — the
       # image is whatever the user already published, wherever that is.
@@ -284,7 +308,13 @@ if [ "$INTERACTIVE" = 1 ]; then
       echo " Docker Hub username as the project to push there instead — see"
       echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
       REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
+      ask_valid REGISTRY "Registry host" \
+        '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]+)?$' \
+        "A registry host is a hostname, optionally with :port."
       PROJECT=$(ask  "ECIR registry project" "${PROJECT:-$GROUP}")
+      ask_valid PROJECT "ECIR registry project" \
+        '^[a-z0-9]+([._-][a-z0-9]+)*$' \
+        "Registry paths are lowercase alphanumeric with '.', '_' or '-'."
     fi
 
     # Deliberately a separate question from the ECIR project above. These are
@@ -479,6 +509,11 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
     # ECIR registry namespace the image is pushed to; they are separate
     # questions with separate answers.
     -e "s#<RESEARCH_PROJECT>#$(esc_repl "${RESEARCH_PROJECT}")#g"
+    # Per-group robot account. Derived from the detected group rather than
+    # hardcoded, otherwise a non-eidf105 group gets its own namespace but
+    # still reaches for eidf105's secret — which passes the dry run and
+    # then fails as ImagePullBackOff.
+    -e "s#<PULL_SECRET>#$(esc_repl "${PULL_SECRET}")#g"
     -e "s#eidf105ns#$(esc_repl "${NAMESPACE}")#g"
     # Replace the whole image line with $IMAGE (already computed per-mode
     # above: :latest for personal, :$USERNAME for template) rather than
@@ -521,12 +556,33 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
   # must not fail for anyone off-cluster (a laptop, no kubectl). So an
   # unreachable cluster is reported differently from a rejected manifest.
   dry_run_check() {  # dry_run_check FILE
-    local file="$1" out
-    out=$(timeout 60 kubectl -n "${NAMESPACE}" create --dry-run=server \
-            -f "$file" 2>&1) && { echo ">> ${file}: accepted by the cluster (dry run)"; return 0; }
+    local file="$1" out rc
+    # `timeout` is GNU coreutils and is absent from a stock macOS, so fall
+    # back to kubectl's own deadline rather than failing with "command not
+    # found" — which would look exactly like a rejected manifest.
+    if command -v timeout >/dev/null 2>&1; then
+      out=$(timeout 60 kubectl --request-timeout=45s -n "${NAMESPACE}" \
+              create --dry-run=server -f "$file" 2>&1); rc=$?
+    else
+      out=$(kubectl --request-timeout=45s -n "${NAMESPACE}" \
+              create --dry-run=server -f "$file" 2>&1); rc=$?
+    fi
+    [ "$rc" -eq 0 ] && {
+      echo ">> ${file}: accepted by the cluster (dry run)"; return 0; }
+    # 124 is `timeout` firing. Its output is "Terminated", which matches no
+    # error pattern, so without this a cluster that hangs — the normal
+    # symptom of being off the VPN — reads as a rejected manifest.
+    if [ "$rc" -eq 124 ]; then
+      echo ">> (skipped the cluster dry-run: ${NAMESPACE} did not respond)"
+      return 0
+    fi
     case "$out" in
-      *"Unable to connect"*|*"connection refused"*|*"no such host"*|\
-      *"credentials"*|*"Unauthorized"*|*"timed out"*)
+      # Note the refusal wording: kubectl says "The connection to the server
+      # ... was refused", which does NOT contain "connection refused". Match
+      # the word on its own so both phrasings land here.
+      *"Unable to connect"*|*refused*|*"no such host"*|*"credentials"*|\
+      *"Unauthorized"*|*"timed out"*|*"i/o timeout"*|*"context deadline"*|\
+      *"couldn't get current server API group list"*)
         echo ">> (skipped the cluster dry-run: ${NAMESPACE} not reachable from here)"
         ;;
       *)

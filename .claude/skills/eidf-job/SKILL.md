@@ -7,7 +7,7 @@ description: >
   anything on "the cluster", "EIDF", "the GPUs", the H100s/A100s, or asks
   for a "job yaml", "job file", "pod", "interactive pod", "vllm server",
   or wants to change the GPUs/CPUs/memory/image of an existing
-  job.<user>.<project>.yaml — even if they never say "EIDF" or "Kubernetes".
+  job.<user_safe>.<project>.yaml — even if they never say "EIDF" or "Kubernetes".
   Never write EIDF job YAML from scratch or from memory: this skill fills
   the group's standard templates so every job carries the required
   ownership labels and cluster conventions.
@@ -31,8 +31,9 @@ YAML almost always gets something wrong that the templates get right:
   usage reports nothing.
 - **Non-root as the actual user**: `runAsUser`/`runAsGroup` matching the
   user's NFS uid/gid, so files written to `/data` are owned correctly.
-- **Working pull secret** (`eidf105-ecir-read-robot`), NFS mount, `/dev/shm`
-  sizing, kueue queue label, `PYTHONUNBUFFERED=1` for live logs.
+- **Working pull secret** (`<group>-ecir-read-robot`, so
+  `eidf105-ecir-read-robot` here), NFS mount, `/dev/shm` sizing, kueue queue
+  label, `PYTHONUNBUFFERED=1` for live logs.
 
 So: **locate the templates, fill the placeholders, keep everything you
 don't have a reason to change.**
@@ -180,14 +181,16 @@ when someone asks for an interactive GPU pod:
 
 ## Step 4 — fill every placeholder, change nothing else
 
-Copy the template to `job.<username>.<project>.yaml` and replace **all** of:
+Copy the template to `job.<username_safe>.<project>.yaml` and replace
+**all** of:
 
 | Placeholder | Value |
 |---|---|
 | `<USERNAME>` | login account from `id -un`, **exactly as-is** — this fills the `owner` label and the `/data/users/` path |
-| `<USERNAME_SAFE>` | the same account folded to a legal resource name: lowercase, `_` → `-` (so `ada_lovelace` → `ada-lovelace`). Fills `generateName` and the Service `name` |
+| `<USERNAME_SAFE>` | the same account folded to a legal resource name: lowercase, `_` and `.` → `-` (so `ada_lovelace` → `ada-lovelace`). Fills `generateName` and the Service `name` |
 | `<USER_ID>` / `<GROUP_ID>` | from `id -u` / `id -g` |
 | `<RESEARCH_PROJECT>` | the research project from Step 2 (e.g. `mri_recon`) — ask, never derive from the namespace |
+| `<PULL_SECRET>` | the group's ECIR read robot, `<group>-ecir-read-robot` (so `eidf105-ecir-read-robot`) — it must match the namespace's group, or the image pull fails long after the manifest is accepted |
 | `<COMMAND>` | the user's command (CUDA batch template; it sits in a YAML block scalar, so quotes inside it are safe) |
 | `<MODEL>` | HF model id (vllm template) |
 | `<SECRET_ENV_HOOK>` | see Step 6 |
@@ -284,15 +287,15 @@ If no secrets are needed, just delete the `<SECRET_ENV_HOOK>` line.
 
 ## Step 7 — check and hand over
 
-1. If `kubmonitor` is installed, run `kubmonitor validate job.<username>.<project>.yaml`
+1. If `kubmonitor` is installed, run `kubmonitor validate job.<username_safe>.<project>.yaml`
    — it confirms the ownership labels survived. Fix anything it reports.
-2. `kubectl -n eidf105ns create --dry-run=server -f job.<username>.<project>.yaml`
+2. `kubectl -n eidf105ns create --dry-run=server -f job.<username_safe>.<project>.yaml`
    runs the file through the real admission chain (kueue included)
    without creating anything — a free catch for schema mistakes.
 3. Give the user the deploy commands:
 
 ```bash
-kubectl -n eidf105ns create -f job.<username>.<project>.yaml
+kubectl -n eidf105ns create -f job.<username_safe>.<project>.yaml
 kubectl -n eidf105ns get pods -l owner=<username> -w
 kubectl -n eidf105ns logs -f <pod-name>        # batch/serving
 kubectl -n eidf105ns exec -it <pod-name> -- /bin/bash   # interactive
@@ -318,7 +321,7 @@ explicit about the VRAM step-down (e.g. a model chosen for H200's 141GB
 may need a smaller batch, sharding, or quantization on an 80GB card) —
 let the user decide rather than silently downgrading.
 
-## Editing an existing job.<user>.<project>.yaml
+## Editing an existing job.<user_safe>.<project>.yaml
 
 Apply the requested change (GPUs, image, command, …) and leave the rest
 intact — in particular the labels block, securityContext,

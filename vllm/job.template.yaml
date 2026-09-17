@@ -21,8 +21,8 @@ metadata:
     # fairness — NOT the eidf105 group code, which is already implied by
     # the namespace. Reuse one name across runs so usage reports group
     # them (see kubmonitor docs/LABELS.md).
-    owner: <USERNAME>
-    project: <RESEARCH_PROJECT>
+    owner: "<USERNAME>"
+    project: "<RESEARCH_PROJECT>"
     purpose: serving
 spec:
   parallelism: 1
@@ -33,8 +33,8 @@ spec:
     metadata:
       labels:
         app: vllm
-        owner: <USERNAME>            # kubectl get pods -l owner=<you>
-        project: <RESEARCH_PROJECT>
+        owner: "<USERNAME>"            # kubectl get pods -l owner=<you>
+        project: "<RESEARCH_PROJECT>"
         purpose: serving
     spec:
       restartPolicy: Never
@@ -44,9 +44,9 @@ spec:
       securityContext:
         runAsUser: <USER_ID>
         runAsGroup: <GROUP_ID>
-      # Pre-provisioned read-only robot account for eidf105, shared across the project.
+      # Pre-provisioned read-only robot account for the group, shared by everyone in it.
       imagePullSecrets:
-        - name: eidf105-ecir-read-robot
+        - name: <PULL_SECRET>
       containers:
         - name: vllm
           image: registry.eidf.ac.uk/eidf105/vllm-eidf:latest
