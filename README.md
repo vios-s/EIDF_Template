@@ -21,6 +21,10 @@ follow the same pattern:
   `purpose` labels (filled in by the wizard), so it's always clear whose
   workload is whose — handy for `kubectl get pods -l owner=<you>` and for
   admins tidying up the shared namespace. Keep them if you hand-edit a Job.
+  `project` is your *research* project (`mri_recon`, `fairness`), not the
+  `eidf105` group code — the namespace already says which group you are in,
+  so putting it in the label would make every workload look identical. List
+  them with `kubectl get jobs -L project,owner`.
 - **Non-root by default**: the image bakes in a user matching *your* EIDF NFS
   uid/gid (`id` on the login VM), so `kubectl exec -it` drops you in as
   yourself, not root, with read/write access to the NFS share.
@@ -34,8 +38,9 @@ follow the same pattern:
   prints those commands so you review and run them yourself.
   ```bash
   ./build.sh              # full interactive wizard — asks target, mode,
-                           # username/uid/gid, namespace, registry/project,
-                           # job type, confirms, builds, writes job.<you>.yaml
+                           # username/uid/gid, namespace, registry/ECIR project,
+                           # research project, job type, confirms, builds,
+                           # then writes job.<you>.<project>.yaml
                            # (+ service.<you>.yaml for vllm serving), then
                            # prints the push + deploy commands. Every answer
                            # has a sensible default, just press Enter.
@@ -73,7 +78,7 @@ output. You still review and `kubectl create` the file yourself.
 - **Zero setup**: clone this repo, `cd` in, run Claude Code — the skill
   loads automatically. Best when starting a new job from scratch.
 - **One-time personal install** — works from *any* directory afterwards
-  (including your own projects and existing `job.<you>.yaml` files):
+  (including your own projects and existing `job.<you>.<project>.yaml` files):
 
   ```bash
   mkdir -p ~/.claude/skills/eidf-job

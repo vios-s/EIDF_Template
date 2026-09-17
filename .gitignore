@@ -29,3 +29,5 @@ cmake-build-*/
 .idea/
 *.o
 *.log
+tests/__pycache__/
+__pycache__/

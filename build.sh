@@ -6,8 +6,9 @@
 #
 # Usage:
 #   ./build.sh                       # full interactive wizard (asks everything,
-#                                     # builds locally, writes job.<you>.yaml,
-#                                     # then prints the push + deploy commands)
+#                                     # builds locally, writes
+#                                     # job.<you>.<project>.yaml, then prints
+#                                     # the push + deploy commands)
 #   ./build.sh <target>               # non-interactive: just build the personal image
 #   ./build.sh <target> --template    # non-interactive: build Dockerfile.template
 #   ./build.sh <target> --base        # non-interactive: (shared-base targets) rebuild Dockerfile.base
@@ -18,8 +19,12 @@
 # is always something you explicitly run yourself.
 #
 # Env vars (all optional, used as defaults you can still override
-# interactively): USERNAME, USER_ID, GROUP_ID, REGISTRY, PROJECT, IMAGE
-# (non-interactive mode only).
+# interactively): USERNAME, USER_ID, GROUP_ID, REGISTRY, PROJECT,
+# RESEARCH_PROJECT, IMAGE (non-interactive mode only).
+#
+# PROJECT and RESEARCH_PROJECT are not the same thing: PROJECT is the ECIR
+# registry namespace an image is pushed to, RESEARCH_PROJECT is the strand of
+# work a job belongs to and fills the `project` usage-accounting label.
 #
 # Adding a new target: create a new top-level folder with a Dockerfile and an
 # `image.conf` (copy an existing one) — nothing in this script needs editing.
@@ -32,6 +37,22 @@ ask() {  # ask PROMPT DEFAULT -> prints the chosen value
   local prompt="$1" default="$2" reply
   read -r -p "${prompt} [${default}]: " reply || true
   echo "${reply:-$default}"
+}
+
+ask_valid() {  # ask_valid VAR PROMPT REGEX HINT -> re-asks until the answer matches
+  # A re-ask loop must not be infinite: `ask` returns the (possibly empty)
+  # default at EOF, so piping answers in — or closing stdin — would otherwise
+  # spin forever instead of failing. Give up after a few tries.
+  local var="$1" prompt="$2" pattern="$3" hint="$4" tries=0
+  until [[ "${!var}" =~ $pattern ]]; do
+    if [ "$tries" -ge 3 ]; then
+      echo "error: '${!var}' is not a valid ${prompt,,}. ${hint}" >&2
+      exit 1
+    fi
+    [ "$tries" -gt 0 ] || [ -n "${!var}" ] && echo "  ${hint}"
+    printf -v "$var" '%s' "$(ask "$prompt" "")"
+    tries=$((tries + 1))
+  done
 }
 
 esc_repl() {  # escape a string for use as a sed s### REPLACEMENT
@@ -48,6 +69,40 @@ esc_repl() {  # escape a string for use as a sed s### REPLACEMENT
   s="${s//\\/\\\\}"
   s="${s//&/\\&}"
   s="${s//#/\\#}"
+  printf '%s' "$s"
+}
+
+detect_group() {  # best-effort EIDF group code (eidfXXX) for this machine
+  # Hardcoding eidf105 makes every default wrong for any other EIDF group,
+  # even though EIDF naming is regular enough to just read it off the box.
+  # Deliberately NOT from kubectl: the shared kubeconfig carries no
+  # namespace (its context is `eidf-general-prod`), so it cannot answer this.
+  local code=""
+  # Login VMs are named <group>-<team>.vms.os.eidf.epcc.ed.ac.uk
+  code=$(hostname 2>/dev/null | grep -oE '^eidf[0-9]+' || true)
+  # Otherwise the group's shared home directory.
+  [ -n "$code" ] || code=$(ls -d /home/eidf[0-9]* 2>/dev/null | head -1 |
+                           grep -oE 'eidf[0-9]+' || true)
+  printf '%s' "$code"
+}
+
+name_safe() {  # name_safe ACCOUNT -> RFC 1123 subdomain-safe form
+  # Kubernetes resource names (metadata.name, generateName, Service names)
+  # must be lowercase alphanumeric with '-' or '.'. Account names here are
+  # not: `ada_lovelace` and mixed case both occur, and either one makes the
+  # API server reject the manifest. Fold to the nearest legal name; the
+  # `owner` label still carries the untouched account.
+  local s="${1,,}"
+  # '.' is legal in a subdomain but only *between* labels, so `a..b` and
+  # `a.-b` are both rejected by the API server. Nothing here needs dots, so
+  # fold them to '-' as well and the result is always a DNS-1123 *label* —
+  # stricter than required, and valid by construction.
+  s="${s//[^a-z0-9]/-}"        # anything illegal (incl. '_' and '.') -> '-'
+  while [[ "$s" == *--* ]]; do s="${s//--/-}"; done   # collapse runs
+  s="${s:0:30}"                # leave room for the template's prefix and the
+                               # server's random suffix inside the 63-char cap
+  s="${s#-}"                   # trim leading '-'
+  s="${s%-}"                   # trim trailing '-' (incl. one left by the cut)
   printf '%s' "$s"
 }
 
@@ -147,18 +202,40 @@ if [ "$INTERACTIVE" = 1 ]; then
   BASE_IMAGE_NAME="${TARGET_BASE_IMAGE_NAME[$TARGET]}"
   HAS_TEMPLATE="${TARGET_HAS_TEMPLATE[$TARGET]}"
 
+  # Read the group off the machine once, so namespace/registry-project
+  # defaults suit whoever is running this rather than always eidf105.
+  GROUP="$(detect_group)"
+  if [ -n "$GROUP" ]; then
+    echo
+    echo "Detected EIDF group: ${GROUP} (namespace ${GROUP}ns) — press Enter"
+    echo "to accept the defaults below, or type your own."
+  else
+    GROUP=eidf105
+  fi
+  # Naming convention for the shared ECIR read robot. For eidf105 this is
+  # exactly the value the templates used to hardcode, so nothing changes
+  # for the group this repo was written for.
+  PULL_SECRET="${GROUP}-ecir-read-robot"
+
   echo
   declare -a MODE_OPTIONS=("personal — your own image")
   [ "$HAS_TEMPLATE" = yes ] && MODE_OPTIONS+=("template — group template, tagged with your username")
   [ "$HAS_BASE" = yes ] && MODE_OPTIONS+=("base — maintainer only: rebuild the shared base image")
+  # Not every job needs an image built here. Plenty of people already have
+  # one on Docker Hub or elsewhere, and the templates are happy to point at
+  # it — the README and the eidf-job skill both say the registry is the
+  # user's choice. Without this option the wizard contradicted them by
+  # forcing a build nobody wanted just to get a job file out.
+  MODE_OPTIONS+=("existing — image is already published, just write the job yaml")
 
   if [ "${#MODE_OPTIONS[@]}" -gt 1 ]; then
-    echo "What do you want to build for '${TARGET}'?"
+    echo "What do you want to do for '${TARGET}'?"
     select opt in "${MODE_OPTIONS[@]}"; do
       case "$opt" in
         personal*) MODE=personal ;;
         template*) MODE=template ;;
         base*)     MODE=base ;;
+        existing*) MODE=existing ;;
       esac
       [ -n "${opt:-}" ] && break
     done
@@ -172,18 +249,92 @@ if [ "$INTERACTIVE" = 1 ]; then
     echo " Docker Hub username as the project to push there instead — see"
     echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
     REGISTRY=$(ask "Registry host" "${REGISTRY:-registry.eidf.ac.uk}")
-    PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
+    # These two only ever reach the image reference, so a bad character here
+    # survives yaml generation AND the server dry-run — a manifest the
+    # cluster happily accepts and then cannot pull. Catch it while we can
+    # still re-ask, rather than at ImagePullBackOff.
+    ask_valid REGISTRY "Registry host" \
+      '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]+)?$' \
+      "A registry host is a hostname, optionally with :port."
+    PROJECT=$(ask  "ECIR registry project" "${PROJECT:-$GROUP}")
+    ask_valid PROJECT "ECIR registry project" \
+      '^[a-z0-9]+([._-][a-z0-9]+)*$' \
+      "Registry paths are lowercase alphanumeric with '.', '_' or '-'."
     USERNAME="${USERNAME:-$(id -un)}"; USER_ID="${USER_ID:-$(id -u)}"; GROUP_ID="${GROUP_ID:-$(id -g)}"
   else
     USERNAME=$(ask "Your username"        "${USERNAME:-$(id -un)}")
     USER_ID=$(ask  "Your uid"              "${USER_ID:-$(id -u)}")
     GROUP_ID=$(ask "Your gid"              "${GROUP_ID:-$(id -g)}")
-    NAMESPACE=$(ask "Kubernetes namespace" "eidf105ns")
-    echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
-    echo " Docker Hub username as the project to push there instead — see"
-    echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
-    REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
-    PROJECT=$(ask  "ECIR registry project" "${PROJECT:-eidf105}")
+    # runAsUser/runAsGroup are ints in the pod schema: a non-numeric answer
+    # produces yaml kubectl rejects with an opaque unmarshal error, long
+    # after the image has built.
+    ask_valid USER_ID  "Your uid" '^[0-9]+$' "It must be a number — find yours with \`id -u\`."
+    ask_valid GROUP_ID "Your gid" '^[0-9]+$' "It must be a number — find yours with \`id -g\`."
+    USERNAME_SAFE=$(name_safe "$USERNAME")
+    if [ "$USERNAME_SAFE" != "$USERNAME" ]; then
+      echo "  note: job/service names will use '${USERNAME_SAFE}' —"
+      echo "  Kubernetes resource names allow neither '_' nor uppercase."
+      echo "  The 'owner' label keeps your real account '${USERNAME}'."
+    fi
+    if [ -z "$USERNAME_SAFE" ]; then
+      echo "error: '${USERNAME}' has no characters usable in a resource name." >&2
+      exit 1
+    fi
+    NAMESPACE=$(ask "Kubernetes namespace" "${NAMESPACE:-${GROUP}ns}")
+    # The namespace is substituted into the kueue queue-name LABEL, so an
+    # answer that is not a legal DNS-1123 label produces a manifest the API
+    # server rejects on the label, with a message that never mentions the
+    # namespace.
+    # Capped at 52, not 63: the namespace goes into the queue-name label as
+    # "${NAMESPACE}-user-queue", and a label VALUE is limited to 63. A
+    # 63-character namespace is a legal namespace whose label the server
+    # then rejects, complaining about a value the user never typed.
+    ask_valid NAMESPACE "Kubernetes namespace" \
+      '^[a-z0-9]([-a-z0-9]{0,50}[a-z0-9])?$' \
+      "Namespaces are lowercase alphanumeric with '-' (max 52 here, so
+   '<namespace>-user-queue' stays inside the 63-char label limit)."
+    if [ "$MODE" = existing ]; then
+      # Nothing is built or pushed, so registry/project never come up — the
+      # image is whatever the user already published, wherever that is.
+      echo "Which image should the job run? Any registry works: a Docker Hub"
+      echo "reference like <account>/<image>:<tag> pulls with no setup, and an"
+      echo "ECIR one (${REGISTRY:-registry.eidf.ac.uk}/${GROUP}/<image>:<tag>)"
+      echo "pulls via the shared robot secret already in the template."
+      IMAGE=$(ask "Image reference" "${IMAGE:-}")
+      ask_valid IMAGE "Image reference" '^[^[:space:]]+$' \
+        "An image reference cannot be empty or contain spaces."
+    else
+      echo "(ECIR full/out of quota? Enter docker.io as the registry host and your"
+      echo " Docker Hub username as the project to push there instead — see"
+      echo " CONTRIBUTING.md's \"Alternative: pushing to Docker Hub\" section.)"
+      REGISTRY=$(ask "Registry host"         "${REGISTRY:-registry.eidf.ac.uk}")
+      ask_valid REGISTRY "Registry host" \
+        '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]+)?$' \
+        "A registry host is a hostname, optionally with :port."
+      PROJECT=$(ask  "ECIR registry project" "${PROJECT:-$GROUP}")
+      ask_valid PROJECT "ECIR registry project" \
+        '^[a-z0-9]+([._-][a-z0-9]+)*$' \
+        "Registry paths are lowercase alphanumeric with '.', '_' or '-'."
+    fi
+
+    # Deliberately a separate question from the ECIR project above. These are
+    # different things that used to share one answer: PROJECT is where the
+    # image is pushed (a registry namespace), RESEARCH_PROJECT is what the
+    # job is work *on*, and it goes in the `project` usage-accounting label.
+    # Answering both with "eidf105" put the same value on every workload in
+    # the namespace, which is what made the label useless.
+    echo
+    echo "Which research project is this job for? This becomes the 'project'"
+    echo "label used for usage reporting — a short name for the strand of work"
+    echo "(e.g. mri_recon, fairness), NOT the eidf105 group code. Reuse the"
+    echo "same name across runs so they group together; group convention is"
+    echo "underscores, since 'mri_recon' and 'mri-recon' report separately."
+    RESEARCH_PROJECT=$(ask "Research project" "${RESEARCH_PROJECT:-}")
+    # A label value k8s would reject fails at `kubectl create`, long after this
+    # script has exited successfully — so catch it here, while we can re-ask.
+    ask_valid RESEARCH_PROJECT "Research project" \
+      '^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$' \
+      "Use letters, digits, '-', '_' or '.', starting and ending alphanumeric (max 63)."
 
     count="${JOBMODE_COUNT[$TARGET]}"
     JOB_MODE_IDX=1
@@ -227,19 +378,29 @@ if [ "$INTERACTIVE" = 1 ]; then
     base)     IMAGE="${REGISTRY}/${PROJECT}/${BASE_IMAGE_NAME}:latest" ;;
     template) IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}:${USERNAME}" ;;
     personal) IMAGE="${REGISTRY}/${PROJECT}/${IMAGE_NAME}:latest" ;;
+    existing) : ;;   # already asked for, verbatim
   esac
 
   echo
-  echo "About to build [${MODE}] for '${TARGET}':"
+  if [ "$MODE" = existing ]; then
+    echo "About to write the job yaml for '${TARGET}' (no build):"
+  else
+    echo "About to build [${MODE}] for '${TARGET}':"
+  fi
   echo "  image:  ${IMAGE}"
   if [ "$MODE" != base ]; then
     echo "  user:   ${USERNAME} (uid=${USER_ID}, gid=${GROUP_ID})"
-    echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME}.yaml"
+    echo "  study:  ${RESEARCH_PROJECT} (fills the 'project' label)"
+    echo "  job:    ${JOB_MODE_NAME} -> will write ${DIR}/job.${USERNAME_SAFE}.${RESEARCH_PROJECT}.yaml"
     [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ] \
-      && echo "          + ${DIR}/service.${USERNAME}.yaml"
+      && echo "          + ${DIR}/service.${USERNAME_SAFE}.yaml"
     [ "$WANT_SECRET" = 1 ] && echo "  secret: ${ENV_FILE} -> Secret '${SECRET_NAME}' (you create this yourself)"
   fi
-  echo "  (this only builds locally — you push it yourself afterward)"
+  if [ "$MODE" = existing ]; then
+    echo "  (nothing is built or pushed — the image above must already exist)"
+  else
+    echo "  (this only builds locally — you push it yourself afterward)"
+  fi
   echo
   if ! confirm "Proceed?" "y"; then
     echo "Aborted — nothing built."
@@ -320,20 +481,40 @@ case "$MODE" in
       --build-arg GROUP_ID="${GROUP_ID}" \
       -t "${IMAGE}" .
     ;;
+  existing)
+    echo ">> [${TARGET}] Using the published image ${IMAGE} — nothing to build"
+    ;;
 esac
-echo ">> Built ${IMAGE}"
+[ "$MODE" = existing ] || echo ">> Built ${IMAGE}"
 
 # --- interactive extra: write job (+ service) yaml -----------------------------
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
-  JOB_OUT="job.${USERNAME}.yaml"
+  # Includes the research project: one person working on two projects would
+  # otherwise have the second run silently overwrite the first's job file.
+  JOB_OUT="job.${USERNAME_SAFE}.${RESEARCH_PROJECT}.yaml"
   sed_args=(
-    -e "s#<USERNAME>#${USERNAME}#g"
-    -e "s#<USER_ID>#${USER_ID}#g"
-    -e "s#<GROUP_ID>#${GROUP_ID}#g"
-    # Fills the eidf.ac.uk/project usage-accounting label (same id as the
-    # registry project for this group).
-    -e "s#<PROJECT>#${PROJECT}#g"
-    -e "s#eidf105ns#${NAMESPACE}#g"
+    -e "s#<USERNAME>#$(esc_repl "${USERNAME}")#g"
+    # Resource names (generateName, the Service name) are RFC 1123
+    # subdomains: no underscores, no uppercase. Account names have both —
+    # `ada_lovelace` is a real shape here — and such a name produces yaml
+    # the API server rejects outright. The `owner` LABEL keeps the true
+    # account (label values do allow `_`), so attribution is unaffected:
+    # kubmonitor's name-based fallback already compares `_` in accounts
+    # against `-` in names.
+    -e "s#<USERNAME_SAFE>#$(esc_repl "${USERNAME_SAFE}")#g"
+    -e "s#<USER_ID>#$(esc_repl "${USER_ID}")#g"
+    -e "s#<GROUP_ID>#$(esc_repl "${GROUP_ID}")#g"
+    # Fills the `project` usage-accounting label — the research project this
+    # job is work on (kubmonitor docs/LABELS.md). NOT ${PROJECT}, which is the
+    # ECIR registry namespace the image is pushed to; they are separate
+    # questions with separate answers.
+    -e "s#<RESEARCH_PROJECT>#$(esc_repl "${RESEARCH_PROJECT}")#g"
+    # Per-group robot account. Derived from the detected group rather than
+    # hardcoded, otherwise a non-eidf105 group gets its own namespace but
+    # still reaches for eidf105's secret — which passes the dry run and
+    # then fails as ImagePullBackOff.
+    -e "s#<PULL_SECRET>#$(esc_repl "${PULL_SECRET}")#g"
+    -e "s#eidf105ns#$(esc_repl "${NAMESPACE}")#g"
     # Replace the whole image line with $IMAGE (already computed per-mode
     # above: :latest for personal, :$USERNAME for template) rather than
     # patching registry/tag piecemeal — the template's hardcoded tag is only
@@ -363,32 +544,93 @@ if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
       echo ">> WARNING: ${JOB_OUT} does not satisfy the usage-accounting label contract (see above)"
   fi
 
+  # ... and then through the real admission chain. `kubmonitor validate` only
+  # checks the label contract: a misspelled field or a string where an int
+  # belongs sails past it and fails at deploy time instead. The eidf-job
+  # skill has always told the assistant to run this (Step 7); the wizard did
+  # not, so the two paths handed back files with different levels of
+  # assurance. Note --dry-run=client is NOT a substitute: it catches only
+  # YAML syntax, and needs the cluster anyway to fetch the schema.
+  #
+  # Advisory, like the check above — the file is already written, and this
+  # must not fail for anyone off-cluster (a laptop, no kubectl). So an
+  # unreachable cluster is reported differently from a rejected manifest.
+  dry_run_check() {  # dry_run_check FILE
+    local file="$1" out rc
+    # `timeout` is GNU coreutils and is absent from a stock macOS, so fall
+    # back to kubectl's own deadline rather than failing with "command not
+    # found" — which would look exactly like a rejected manifest.
+    if command -v timeout >/dev/null 2>&1; then
+      out=$(timeout 60 kubectl --request-timeout=45s -n "${NAMESPACE}" \
+              create --dry-run=server -f "$file" 2>&1); rc=$?
+    else
+      out=$(kubectl --request-timeout=45s -n "${NAMESPACE}" \
+              create --dry-run=server -f "$file" 2>&1); rc=$?
+    fi
+    [ "$rc" -eq 0 ] && {
+      echo ">> ${file}: accepted by the cluster (dry run)"; return 0; }
+    # 124 is `timeout` firing. Its output is "Terminated", which matches no
+    # error pattern, so without this a cluster that hangs — the normal
+    # symptom of being off the VPN — reads as a rejected manifest.
+    if [ "$rc" -eq 124 ]; then
+      echo ">> (skipped the cluster dry-run: ${NAMESPACE} did not respond)"
+      return 0
+    fi
+    case "$out" in
+      # Note the refusal wording: kubectl says "The connection to the server
+      # ... was refused", which does NOT contain "connection refused". Match
+      # the word on its own so both phrasings land here.
+      *"Unable to connect"*|*refused*|*"no such host"*|*"credentials"*|\
+      *"Unauthorized"*|*"timed out"*|*"i/o timeout"*|*"context deadline"*|\
+      *"couldn't get current server API group list"*)
+        echo ">> (skipped the cluster dry-run: ${NAMESPACE} not reachable from here)"
+        ;;
+      *)
+        echo ">> WARNING: the cluster REJECTED ${file} — fix this before deploying:"
+        echo "${out}" | sed 's/^/     /' | head -8
+        ;;
+    esac
+  }
+  if command -v kubectl >/dev/null 2>&1; then
+    dry_run_check "$JOB_OUT"
+  fi
+
   if [ "${TARGET_HAS_SERVICE[$TARGET]}" = yes ] && [ "$JOB_MODE_NAME" = "${TARGET_SERVICE_JOB_MODE[$TARGET]}" ]; then
-    SVC_OUT="service.${USERNAME}.yaml"
-    sed -e "s#<USERNAME>#${USERNAME}#g" "${TARGET_SERVICE_TEMPLATE[$TARGET]}" > "$SVC_OUT"
+    SVC_OUT="service.${USERNAME_SAFE}.yaml"
+    # Same split as the Job: <USERNAME_SAFE> for the Service's own name,
+    # <USERNAME> for the selector, which must match the pod's owner label.
+    sed -e "s#<USERNAME_SAFE>#$(esc_repl "${USERNAME_SAFE}")#g" \
+        -e "s#<USERNAME>#$(esc_repl "${USERNAME}")#g" \
+        "${TARGET_SERVICE_TEMPLATE[$TARGET]}" > "$SVC_OUT"
     echo ">> Wrote ${DIR}/${SVC_OUT}"
+    command -v kubectl >/dev/null 2>&1 && dry_run_check "$SVC_OUT"
   fi
 fi
 
 # --- next steps: push + deploy, printed, never run automatically -------------
 echo
 echo "== Next steps =="
-echo "1. Push it (this script never does this for you):"
-echo "     docker login ${REGISTRY}   # if not already logged in"
-echo "     docker push ${IMAGE}"
+# Numbered at run time: `existing` mode has nothing to push, so the push
+# step disappears rather than being printed as a no-op the user has to
+# work out they should skip.
+step=1
+if [ "$MODE" != existing ]; then
+  echo "${step}. Push it (this script never does this for you):"
+  echo "     docker login ${REGISTRY}   # if not already logged in"
+  echo "     docker push ${IMAGE}"
+  step=$((step + 1))
+fi
 if [ "$INTERACTIVE" = 1 ] && [ "$MODE" != base ]; then
   if [ "$WANT_SECRET" = 1 ]; then
     echo
-    echo "2. Create the Secret from your .env file (this reads ${ENV_FILE} on"
+    echo "${step}. Create the Secret from your .env file (this reads ${ENV_FILE} on"
     echo "   YOUR machine when you run it — nothing from it passed through"
     echo "   this script):"
     echo "     kubectl -n ${NAMESPACE} create secret generic ${SECRET_NAME} --from-env-file=${ENV_FILE}"
-    echo
-    echo "3. Deploy:"
-  else
-    echo
-    echo "2. Deploy:"
+    step=$((step + 1))
   fi
+  echo
+  echo "${step}. Deploy:"
   echo "     kubectl -n ${NAMESPACE} create -f ${DIR}/${JOB_OUT}"
   [ -n "$SVC_OUT" ] && echo "     kubectl -n ${NAMESPACE} apply  -f ${DIR}/${SVC_OUT}"
   echo "     kubectl -n ${NAMESPACE} get pods -l owner=${USERNAME} -w"

@@ -11,13 +11,17 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: vllm-dev-<USERNAME>-
+  generateName: vllm-dev-<USERNAME_SAFE>-
   labels:
     kueue.x-k8s.io/queue-name: eidf105ns-user-queue
     # Ownership labels — keep these: they record whose Job this is and
     # what it's for (e.g. kubectl get jobs -l owner=<you>).
-    owner: <USERNAME>
-    project: <PROJECT>
+    # 'project' is the strand of work this job is for — e.g. mri_recon,
+    # fairness — NOT the eidf105 group code, which is already implied by
+    # the namespace. Reuse one name across runs so usage reports group
+    # them (see kubmonitor docs/LABELS.md).
+    owner: "<USERNAME>"
+    project: "<RESEARCH_PROJECT>"
     purpose: interactive
 spec:
   parallelism: 1
@@ -27,8 +31,8 @@ spec:
     metadata:
       labels:
         app: vllm-dev
-        owner: <USERNAME>            # kubectl get pods -l owner=<you>
-        project: <PROJECT>
+        owner: "<USERNAME>"            # kubectl get pods -l owner=<you>
+        project: "<RESEARCH_PROJECT>"
         purpose: interactive
     spec:
       restartPolicy: Never
@@ -36,7 +40,7 @@ spec:
         runAsUser: <USER_ID>
         runAsGroup: <GROUP_ID>
       imagePullSecrets:
-        - name: eidf105-ecir-read-robot
+        - name: <PULL_SECRET>
       containers:
         - name: vllm
           image: registry.eidf.ac.uk/eidf105/vllm-eidf:latest
